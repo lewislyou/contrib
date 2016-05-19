@@ -24,7 +24,7 @@ import (
 	"os"
 	"sort"
 	"time"
-
+    "strings"
 	"github.com/golang/glog"
 
 	"k8s.io/kubernetes/pkg/api"
@@ -167,7 +167,13 @@ func (ipvsc *ipvsControllerController) getServices() []vip {
 
 	// k -> IP to use
 	// v -> <namespace>/<service name>:<lvs method>
-	for externalIP, nsSvcLvs := range cfgMap.Data {
+	for externalIPIndex, nsSvcLvs := range cfgMap.Data {
+        	var externalIP string
+        	if colonIndex := strings.Index(externalIPIndex, "-"); colonIndex < 0 {
+            		externalIP = externalIPIndex
+        	} else {
+            		externalIP = externalIPIndex[:colonIndex]
+        	}
 		ns, svc, lvsm, err := parseNsSvcLVS(nsSvcLvs)
 		if err != nil {
 			glog.Warningf("%v", err)
