@@ -46,6 +46,9 @@ const (
 	tokenLimit      = 500 // How many github api tokens to not use
 	asyncTokenLimit = 400 // How many github api tokens to not use for 'asyc' calls
 
+	// Unit tests take over an hour now...
+	prMaxWaitTime = 2 * time.Hour
+
 	headerRateRemaining = "X-RateLimit-Remaining"
 	headerRateReset     = "X-RateLimit-Reset"
 )
@@ -897,6 +900,9 @@ func (obj *MungeObject) GetEvents() ([]github.IssueEvent, error) {
 			return nil, err
 		}
 		if tryNextPageAnyway {
+			if len(eventPage) == 0 {
+				break
+			}
 			glog.Infof("For %v: supposedly there weren't more events, but we asked anyway and found %v more.", prNum, len(eventPage))
 			tryNextPageAnyway = false
 		}
@@ -1104,8 +1110,8 @@ func (obj *MungeObject) WaitForPending(requiredContexts []string) error {
 func (obj *MungeObject) WaitForNotPending(requiredContexts []string) error {
 	timeoutChan := make(chan bool, 1)
 	done := make(chan error, 1)
-	// Wait and hour for the github e2e test to finish
-	go timeout(60*time.Minute, timeoutChan)
+	// Wait for the github e2e test to finish
+	go timeout(prMaxWaitTime, timeoutChan)
 	go obj.doWaitStatus(false, requiredContexts, done)
 	select {
 	case err := <-done:
