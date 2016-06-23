@@ -22,12 +22,19 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/golang/glog"
-
 	"github.com/mitchellh/mapstructure"
 	"k8s.io/kubernetes/pkg/api"
+
+	"k8s.io/contrib/ingress/controllers/nginx/nginx/config"
+)
+
+const (
+	customHTTPErrors  = "custom-http-errors"
+	skipAccessLogUrls = "skip-access-log-urls"
 )
 
 // getDNSServers returns the list of nameservers located in the file /etc/resolv.conf
@@ -62,7 +69,7 @@ func getDNSServers() []string {
 // getConfigKeyToStructKeyMap returns a map with the ConfigMapKey as key and the StructName as value.
 func getConfigKeyToStructKeyMap() map[string]string {
 	keyMap := map[string]string{}
-	n := &nginxConfiguration{}
+	n := &config.Configuration{}
 	val := reflect.Indirect(reflect.ValueOf(n))
 	for i := 0; i < val.Type().NumField(); i++ {
 		fieldSt := val.Type().Field(i)
@@ -74,13 +81,13 @@ func getConfigKeyToStructKeyMap() map[string]string {
 }
 
 // ReadConfig obtains the configuration defined by the user merged with the defaults.
-func (ngx *Manager) ReadConfig(config *api.ConfigMap) nginxConfiguration {
-	if len(config.Data) == 0 {
-		return newDefaultNginxCfg()
+func (ngx *Manager) ReadConfig(conf *api.ConfigMap) config.Configuration {
+	if len(conf.Data) == 0 {
+		return config.NewDefault()
 	}
 
-	cfgCM := nginxConfiguration{}
-	cfgDefault := newDefaultNginxCfg()
+	cfgCM := config.Configuration{}
+	cfgDefault := config.NewDefault()
 
 	metadata := &mapstructure.Metadata{}
 
@@ -91,7 +98,26 @@ func (ngx *Manager) ReadConfig(config *api.ConfigMap) nginxConfiguration {
 		Metadata:         metadata,
 	})
 
-	err = decoder.Decode(config.Data)
+	cErrors := make([]int, 0)
+	if val, ok := conf.Data[customHTTPErrors]; ok {
+		delete(conf.Data, customHTTPErrors)
+		for _, i := range strings.Split(val, ",") {
+			j, err := strconv.Atoi(i)
+			if err != nil {
+				glog.Warningf("%v is not a valid http code: %v", i, err)
+			} else {
+				cErrors = append(cErrors, j)
+			}
+		}
+	}
+
+	cSkipUrls := make([]string, 0)
+	if val, ok := conf.Data[skipAccessLogUrls]; ok {
+		delete(conf.Data, skipAccessLogUrls)
+		cSkipUrls = strings.Split(val, ",")
+	}
+
+	err = decoder.Decode(conf.Data)
 	if err != nil {
 		glog.Infof("%v", err)
 	}
@@ -115,7 +141,22 @@ func (ngx *Manager) ReadConfig(config *api.ConfigMap) nginxConfiguration {
 		}
 	}
 
+	cfgDefault.CustomHTTPErrors = ngx.filterErrors(cErrors)
+	cfgDefault.SkipAccessLogURLs = cSkipUrls
 	return cfgDefault
+}
+
+func (ngx *Manager) filterErrors(errCodes []int) []int {
+	fa := make([]int, 0)
+	for _, errCode := range errCodes {
+		if errCode > 299 && errCode < 600 {
+			fa = append(fa, errCode)
+		} else {
+			glog.Warningf("error code %v is not valid for custom error pages", errCode)
+		}
+	}
+
+	return fa
 }
 
 func (ngx *Manager) needsReload(data *bytes.Buffer) (bool, error) {
@@ -178,18 +219,4 @@ func diff(b1, b2 []byte) (data []byte, err error) {
 		err = nil
 	}
 	return
-}
-
-func toMap(iface interface{}) (map[string]interface{}, bool) {
-	value := reflect.ValueOf(iface)
-	if value.Kind() == reflect.Map {
-		m := map[string]interface{}{}
-		for _, k := range value.MapKeys() {
-			m[k.String()] = value.MapIndex(k).Interface()
-		}
-
-		return m, true
-	}
-
-	return map[string]interface{}{}, false
 }

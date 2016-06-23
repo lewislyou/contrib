@@ -21,7 +21,10 @@
         <h1 class="md-display-2">Submit Queue Status</h1>
         <a ng-href="https://k8s.io"><img src="https://raw.githubusercontent.com/kubernetes/kubernetes/master/logo/logo.png" alt="kubernetes logo" class="titleLogo"></a>
       </md-toolbar>
-      <md-toolbar class="md-warn" ng-show="cntl.failedBuild">
+      <md-toolbar class="md-warn md-hue-1" ng-show="cntl.testResults.yellowBuilds">
+        <h2 class="md-toolbar-tools">E2E Tests Are Troubled But Not Failing</h2>
+      </md-toolbar>
+      <md-toolbar class="md-warn" ng-show="cntl.testResults.redBuilds">
         <h2 class="md-toolbar-tools">E2E Tests Failing. Entire submit queue blocked. Last merge&nbsp;<span am-time-ago="cntl.lastMergeTime"></span>.</h2>
       </md-toolbar>
       <md-content class="md-padding">
@@ -61,13 +64,13 @@
           </md-tab>
 
           <md-tab label="Queue" md-on-select="cntl.selectTab('queue')">
-	    <md-content class="md-whiteframe-z2">
+            <md-content class="md-whiteframe-z2">
               <md-toolbar class="md-whiteframe-z2">
-	        <h2 class="md-toolbar-tools">Queued For Retest And Merge ({{cntl.e2equeue.length}})</h2>
+                <h2 class="md-toolbar-tools">Queued For Retest And Merge ({{cntl.e2equeue.length}})</h2>
               </md-toolbar>
-	      <md-subheader class="md-primary">Estimated Merging {{cntl.sqStats.MergeRate}} PRs per day.</md-subheader>
-	    </md-content>
-	    <md-divider></md-divider>
+              <md-subheader class="md-primary">Estimated Merging {{cntl.sqStats.MergeRate}} PRs per day.</md-subheader>
+            </md-content>
+            <md-divider></md-divider>
             <section>
               <md-subheader class="md-primary">CURRENTLY RUNNING</md-subheader>
               <md-list layout-padding>
@@ -142,59 +145,57 @@
 
           <md-tab md-on-select="cntl.selectTab('e2e')">
             <md-tab-label>
-              <span ng-class="{'redTab':cntl.failedBuild}">E2E Tests</span>
+              <span ng-class="{'redTab':cntl.testResults.redBuilds , 'yellowTab':cntl.testResults.yellowBuilds}">E2E Tests</span>
             </md-tab-label>
             <md-tab-body>
               <md-toolbar class="md-whiteframe-z2">
                 <h2 class="md-toolbar-tools">End-to-End Results</h2>
               </md-toolbar>
-              <md-chips ng-model="cntl.builds" readonly="true">
+              <h2 class="md-title" ng-show="cntl.testResults.blockingBuilds.length > 0">Queue-Blocking Builds</h2>
+              <md-chips ng-model="cntl.testResults.blockingBuilds" readonly="true">
+                <md-chip-template title="{{$chip.msg}}">
+                  <span style="color: {{$chip.color}}">{{$chip.state}}</span> <a ng-href="http://ci-test.k8s.io/{{$chip.name}}/{{$chip.id}}/">{{$chip.name}}</a>
+                  <span style="color: {{$chip.color}}">{{$chip.msg}}</span> <span title="Job stability">{{$chip.stability}}</span>
+                </md-chip-template>
+              </md-chips>
+              <h2 class="md-title" ng-show="cntl.testResults.nonBlockingBuilds.length > 0">Non-Queue-Blocking Builds</h2>
+              <md-chips ng-model="cntl.testResults.nonBlockingBuilds" readonly="true">
                 <md-chip-template title="{{$chip.msg}}">
                   <span style="color: {{$chip.color}}">{{$chip.state}}</span> <a ng-href="http://ci-test.k8s.io/{{$chip.name}}/{{$chip.id}}/">{{$chip.name}}</a>
                   <span style="color: {{$chip.color}}">{{$chip.msg}}</span> <span title="Job stability">{{$chip.stability}}</span>
                 </md-chip-template>
               </md-chips>
               <br>
+              <br>
               <h2 class="md-title" ng-show="cntl.OverallHealth.length > 0">Overall Health: {{ cntl.OverallHealth }}</h2>
-              <p>Health percents are the fraction of the time that a given job is stable for the last day, or since the submit queue restarted<span ng-show="cntl.StartTime.length > 0"> ({{ cntl.StartTime }})</span>, whichever is shorter. The <a href="http://storage.googleapis.com/kubernetes-test-history/static/index.html"><strong>24-Hour Test Report</strong></a> shows more detail, along with a list of flaky and broken tests in merge-blocking jobs.</p>
+              <p>Health percents are the fraction of the time that a given job is stable for the last day, or since the submit queue restarted ({{ cntl.sqStats.StartTime | date:'medium'}})</span>, whichever is shorter. The <a href="http://storage.googleapis.com/kubernetes-test-history/static/index.html"><strong>24-Hour Test Report</strong></a> shows more detail, along with a list of flaky and broken tests in merge-blocking jobs.
+              </p>
+              <p>
+                <img src="http://storage.googleapis.com/kubernetes-test-history/k8s-queue-health.png" style="max-width: 100%"/>
+              </p>
             </md-tab-body>
           </md-tab>
 
           <md-tab label="Info" md-on-select="cntl.selectTab('info')">
-	    <md-content class="md-padding">
-	      <md-tabs md-dynamic-height md-border-bottom>
+            <md-content class="md-padding">
+              <md-tabs md-dynamic-height md-border-bottom>
 
                 <md-tab label="Queue Order">
                   <md-toolbar class="md-whiteframe-z2">
                     <h2 class="md-toolbar-tools">How PRs get ordered in the queue</h2>
                   </md-toolbar>
-	          <md-content class="md-padding">
-	            <span id="priority-info"></span>
-	          </md-content>
-	        </md-tab>
+                  <md-content class="md-padding">
+                    <span id="priority-info"></span>
+                  </md-content>
+                </md-tab>
 
                 <md-tab label="Merge Requirements">
                   <md-toolbar class="md-whiteframe-z2">
                     <h2 class="md-toolbar-tools">Requirements for a PR to get automatically merged </h2>
                   </md-toolbar>
-	          <md-content class="md-padding">
-	            <span id="merge-info"></span>
-	          </md-content>
-	        </md-tab>
-
-                <md-tab label="Users">
-                  <md-toolbar class="md-whiteframe-z2">
-                    <h2 class="md-toolbar-tools">Users</h2>
-                  </md-toolbar>
-                  <md-list>
-                    <md-list-item class="md-2-line" ng-repeat="user in cntl.users track by user.Login" ng-click="cntl.goToPerson(user.Login)">
-                      <img ng-src="{{user.AvatarURL}}" class="md-avatar" alt="{{user.Login}}">
-                      <md-content class="md-list-item-text" layout="column">
-                        <h3 class="md-body-1">{{user.Login}}</h3>
-                        <h4 class="md-body-2">On list because: {{user.Access}}</h4>
-                      </md-content>
-                    </md-list-item>
-                  </md-list>
+                  <md-content class="md-padding">
+                    <span id="merge-info"></span>
+                  </md-content>
                 </md-tab>
 
                 <md-tab label="Bot Stats">
@@ -204,10 +205,13 @@
                     </md-toolbar>
                   </md-content>
                   <br>
-                  <h3 class=md-title>Next Run Loop: <span id="next-run-time"></span></h3>
-                  <h3 class=md-title>API Calls Per Second: <span id="api-calls-per-sec"></span></h3>
-                  <h3 class=md-title>Github Rate Limit Count: <span id="github-api-limit-count"></span></h3>
-                  <h3 class=md-title>Github Rate Limit Next Reset: <span id="github-api-limit-reset"></span></h3>
+                  <h3 class=md-title>Bot Started: {{ cntl.sqStats.StartTime | date:'medium' }}</h3>
+                  <h3 class=md-title>Next Sync Loop: {{ cntl.botStats.NextLoopTime | date:'medium' }}</h3>
+                  <h3 class=md-title>API Calls Per Second: {{ cntl.botStats.APIPerSec }}</h3>
+                  <h3 class=md-title>Github Rate Limit Count: {{ cntl.botStats.LimitRemaining }}</h3>
+                  <h3 class=md-title>Github Rate Limit Next Reset: {{ cntl.botStats.LimitResetTime | date:'medium' }}</h3>
+                  <h3 class=md-title>Retests avoided because of e2e test flakes: {{ cntl.sqStats.RetestsAvoided }}</h3>
+                  <h3 class=md-title>Flakes ignored: {{ cntl.sqStats.FlakesIgnored }}</h3>
                   <md-content class="md-whiteframe-z2">
                     <md-data-table-container>
                       <md-data-table-toolbar>
@@ -217,12 +221,12 @@
                         <thead md-order="cntl.StatOrder">
                           <tr>
                             <th order-by="$key" name="Call"></th>
-                            <th order-by="Count" name="Count ({{ cntl.APICount }})" numeric descend-first></th>
-                            <th order-by="CachedCount" name="Cached Count ({{ cntl.CachedAPICount }})" numeric descend-first></th>
+                            <th order-by="Count" name="Count ({{ cntl.botStats.APICount }})" numeric descend-first></th>
+                            <th order-by="CachedCount" name="Cached Count ({{ cntl.botStats.CachedAPICount }})" numeric descend-first></th>
                           </tr>
                         </thead>
                         <tbody>
-                          <tr ng-repeat="stat in cntl.botStats | toArray | orderBy: cntl.StatOrder track by stat.$key">
+                          <tr ng-repeat="stat in cntl.botStats.Analytics | toArray | orderBy: cntl.StatOrder track by stat.$key">
                             <td>{{stat.$key}}</td>
                             <td>{{stat.Count}}</td>
                             <td>{{stat.CachedCount}}</td>
@@ -232,9 +236,18 @@
                     </md-data-table-container>
                   </md-content>
                 </md-tab>
-	      </md-tabs>
-	    </md-content>
-	  </md-tab>
+
+                <md-tab label="Health">
+                  <md-toolbar class="md-whiteframe-z2">
+                    <h2 class="md-toolbar-tools">Health chart for the past week</h2>
+                  </md-toolbar>
+                  <md-content class="md-padding">
+                    <span><img src="http://storage.googleapis.com/kubernetes-test-history/k8s-queue-health.png" style="max-width: 100%"/></span>
+                  </md-content>
+                </md-tab>
+              </md-tabs>
+            </md-content>
+          </md-tab>
 
         </md-tabs>
       </md-content>

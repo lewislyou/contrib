@@ -32,6 +32,7 @@ import (
 
 	"github.com/ghodss/yaml"
 	"github.com/golang/glog"
+	"k8s.io/kubernetes/federation/apis/federation"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
@@ -68,7 +69,8 @@ func GetPrinter(format, formatArgument string) (ResourcePrinter, bool, error) {
 		printer = &YAMLPrinter{}
 	case "name":
 		printer = &NamePrinter{
-			Typer:   runtime.ObjectTyperToTyper(api.Scheme),
+			// TODO: this is wrong, these should be provided as an argument to GetPrinter
+			Typer:   api.Scheme,
 			Decoder: api.Codecs.UniversalDecoder(),
 		}
 	case "template", "go-template":
@@ -182,7 +184,7 @@ func (p *VersionedPrinter) PrintObj(obj runtime.Object, w io.Writer) error {
 		if version.IsEmpty() {
 			continue
 		}
-		converted, err := p.convertor.ConvertToVersion(obj, version.String())
+		converted, err := p.convertor.ConvertToVersion(obj, version)
 		if runtime.IsNotRegisteredError(err) {
 			continue
 		}
@@ -202,14 +204,12 @@ func (p *VersionedPrinter) HandledResources() []string {
 // NamePrinter is an implementation of ResourcePrinter which outputs "resource/name" pair of an object.
 type NamePrinter struct {
 	Decoder runtime.Decoder
-	Typer   runtime.Typer
+	Typer   runtime.ObjectTyper
 }
 
 // PrintObj is an implementation of ResourcePrinter.PrintObj which decodes the object
 // and print "resource/name" pair. If the object is a List, print all items in it.
 func (p *NamePrinter) PrintObj(obj runtime.Object, w io.Writer) error {
-	gvk, _, _ := p.Typer.ObjectKind(obj)
-
 	if meta.IsListType(obj) {
 		items, err := meta.ExtractList(obj)
 		if err != nil {
@@ -235,10 +235,9 @@ func (p *NamePrinter) PrintObj(obj runtime.Object, w io.Writer) error {
 		}
 	}
 
-	if gvk != nil {
+	if gvks, _, err := p.Typer.ObjectKinds(obj); err == nil {
 		// TODO: this is wrong, it assumes that meta knows about all Kinds - should take a RESTMapper
-		_, resource := meta.KindToResource(*gvk)
-
+		_, resource := meta.KindToResource(gvks[0])
 		fmt.Fprintf(w, "%s/%s\n", resource.Resource, name)
 	} else {
 		fmt.Fprintf(w, "<unknown>/%s\n", name)
@@ -442,6 +441,8 @@ var withNamespacePrefixColumns = []string{"NAMESPACE"} // TODO(erictune): print 
 var deploymentColumns = []string{"NAME", "DESIRED", "CURRENT", "UP-TO-DATE", "AVAILABLE", "AGE"}
 var configMapColumns = []string{"NAME", "DATA", "AGE"}
 var podSecurityPolicyColumns = []string{"NAME", "PRIV", "CAPS", "VOLUMEPLUGINS", "SELINUX", "RUNASUSER"}
+var clusterColumns = []string{"NAME", "STATUS", "VERSION", "AGE"}
+var networkPolicyColumns = []string{"NAME", "POD-SELECTOR", "AGE"}
 
 // addDefaultHandlers adds print handlers for default Kubernetes types.
 func (h *HumanReadablePrinter) addDefaultHandlers() {
@@ -497,6 +498,10 @@ func (h *HumanReadablePrinter) addDefaultHandlers() {
 	h.Handler(podSecurityPolicyColumns, printPodSecurityPolicyList)
 	h.Handler(thirdPartyResourceDataColumns, printThirdPartyResourceData)
 	h.Handler(thirdPartyResourceDataColumns, printThirdPartyResourceDataList)
+	h.Handler(clusterColumns, printCluster)
+	h.Handler(clusterColumns, printClusterList)
+	h.Handler(networkPolicyColumns, printNetworkPolicy)
+	h.Handler(networkPolicyColumns, printNetworkPolicyList)
 }
 
 func (h *HumanReadablePrinter) unknown(data []byte, w io.Writer) error {
@@ -594,22 +599,51 @@ func printPodBase(pod *api.Pod, w io.Writer, options PrintOptions) error {
 		reason = pod.Status.Reason
 	}
 
-	for i := len(pod.Status.ContainerStatuses) - 1; i >= 0; i-- {
-		container := pod.Status.ContainerStatuses[i]
-
-		restarts += int(container.RestartCount)
-		if container.State.Waiting != nil && container.State.Waiting.Reason != "" {
-			reason = container.State.Waiting.Reason
-		} else if container.State.Terminated != nil && container.State.Terminated.Reason != "" {
-			reason = container.State.Terminated.Reason
-		} else if container.State.Terminated != nil && container.State.Terminated.Reason == "" {
-			if container.State.Terminated.Signal != 0 {
-				reason = fmt.Sprintf("Signal:%d", container.State.Terminated.Signal)
+	initializing := false
+	for i := range pod.Status.InitContainerStatuses {
+		container := pod.Status.InitContainerStatuses[i]
+		switch {
+		case container.State.Terminated != nil && container.State.Terminated.ExitCode == 0:
+			continue
+		case container.State.Terminated != nil:
+			// initialization is failed
+			if len(container.State.Terminated.Reason) == 0 {
+				if container.State.Terminated.Signal != 0 {
+					reason = fmt.Sprintf("Init:Signal:%d", container.State.Terminated.Signal)
+				} else {
+					reason = fmt.Sprintf("Init:ExitCode:%d", container.State.Terminated.ExitCode)
+				}
 			} else {
-				reason = fmt.Sprintf("ExitCode:%d", container.State.Terminated.ExitCode)
+				reason = "Init:" + container.State.Terminated.Reason
 			}
-		} else if container.Ready && container.State.Running != nil {
-			readyContainers++
+			initializing = true
+		case container.State.Waiting != nil && len(container.State.Waiting.Reason) > 0 && container.State.Waiting.Reason != "PodInitializing":
+			reason = "Init:" + container.State.Waiting.Reason
+			initializing = true
+		default:
+			reason = fmt.Sprintf("Init:%d/%d", i, len(pod.Spec.InitContainers))
+			initializing = true
+		}
+		break
+	}
+	if !initializing {
+		for i := len(pod.Status.ContainerStatuses) - 1; i >= 0; i-- {
+			container := pod.Status.ContainerStatuses[i]
+
+			restarts += int(container.RestartCount)
+			if container.State.Waiting != nil && container.State.Waiting.Reason != "" {
+				reason = container.State.Waiting.Reason
+			} else if container.State.Terminated != nil && container.State.Terminated.Reason != "" {
+				reason = container.State.Terminated.Reason
+			} else if container.State.Terminated != nil && container.State.Terminated.Reason == "" {
+				if container.State.Terminated.Signal != 0 {
+					reason = fmt.Sprintf("Signal:%d", container.State.Terminated.Signal)
+				} else {
+					reason = fmt.Sprintf("ExitCode:%d", container.State.Terminated.ExitCode)
+				}
+			} else if container.Ready && container.State.Running != nil {
+				readyContainers++
+			}
 		}
 	}
 	if pod.DeletionTimestamp != nil {
@@ -634,7 +668,12 @@ func printPodBase(pod *api.Pod, w io.Writer, options PrintOptions) error {
 
 	if options.Wide {
 		nodeName := pod.Spec.NodeName
-		if _, err := fmt.Fprintf(w, "\t%s",
+		podIP := pod.Status.PodIP
+		if podIP == "" {
+			podIP = "<none>"
+		}
+		if _, err := fmt.Fprintf(w, "\t%s\t%s",
+			podIP,
 			nodeName,
 		); err != nil {
 			return err
@@ -791,6 +830,38 @@ func printReplicaSet(rs *extensions.ReplicaSet, w io.Writer, options PrintOption
 func printReplicaSetList(list *extensions.ReplicaSetList, w io.Writer, options PrintOptions) error {
 	for _, rs := range list.Items {
 		if err := printReplicaSet(&rs, w, options); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printCluster(c *federation.Cluster, w io.Writer, options PrintOptions) error {
+	var statuses []string
+	for _, condition := range c.Status.Conditions {
+		if condition.Status == api.ConditionTrue {
+			statuses = append(statuses, string(condition.Type))
+		} else {
+			statuses = append(statuses, "Not"+string(condition.Type))
+		}
+	}
+	if len(statuses) == 0 {
+		statuses = append(statuses, "Unknown")
+	}
+
+	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+		c.Name,
+		strings.Join(statuses, ","),
+		c.Status.Version,
+		translateTimestamp(c.CreationTimestamp),
+	); err != nil {
+		return err
+	}
+	return nil
+}
+func printClusterList(list *federation.ClusterList, w io.Writer, options PrintOptions) error {
+	for _, rs := range list.Items {
+		if err := printCluster(&rs, w, options); err != nil {
 			return err
 		}
 	}
@@ -1705,6 +1776,34 @@ func printPodSecurityPolicyList(list *extensions.PodSecurityPolicyList, w io.Wri
 	return nil
 }
 
+func printNetworkPolicy(networkPolicy *extensions.NetworkPolicy, w io.Writer, options PrintOptions) error {
+	name := networkPolicy.Name
+	namespace := networkPolicy.Namespace
+
+	if options.WithNamespace {
+		if _, err := fmt.Fprintf(w, "%s\t", namespace); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "%s\t%v\t%s", name, unversioned.FormatLabelSelector(&networkPolicy.Spec.PodSelector), translateTimestamp(networkPolicy.CreationTimestamp)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(w, appendLabels(networkPolicy.Labels, options.ColumnLabels)); err != nil {
+		return err
+	}
+	_, err := fmt.Fprint(w, appendAllLabels(options.ShowLabels, networkPolicy.Labels))
+	return err
+}
+
+func printNetworkPolicyList(list *extensions.NetworkPolicyList, w io.Writer, options PrintOptions) error {
+	for i := range list.Items {
+		if err := printNetworkPolicy(&list.Items[i], w, options); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func appendLabels(itemLabels map[string]string, columnLabels []string) string {
 	var buffer bytes.Buffer
 
@@ -1780,7 +1879,7 @@ func formatLabelHeaders(columnLabels []string) []string {
 func formatWideHeaders(wide bool, t reflect.Type) []string {
 	if wide {
 		if t.String() == "*api.Pod" || t.String() == "*api.PodList" {
-			return []string{"NODE"}
+			return []string{"IP", "NODE"}
 		}
 		if t.String() == "*api.ReplicationController" || t.String() == "*api.ReplicationControllerList" {
 			return []string{"CONTAINER(S)", "IMAGE(S)", "SELECTOR"}

@@ -18,7 +18,9 @@ package controller
 
 import (
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"k8s.io/contrib/ingress/controllers/gce/backends"
@@ -66,12 +68,29 @@ const (
 
 // ClusterManager manages cluster resource pools.
 type ClusterManager struct {
-	ClusterNamer           utils.Namer
+	ClusterNamer           *utils.Namer
 	defaultBackendNodePort int64
 	instancePool           instances.NodePool
 	backendPool            backends.BackendPool
 	l7Pool                 loadbalancers.LoadBalancerPool
 	firewallPool           firewalls.SingleFirewallPool
+
+	// TODO: Refactor so we simply init a health check pool.
+	// Currently health checks are tied to backends because each backend needs
+	// the link of the associated health, but both the backend pool and
+	// loadbalancer pool manage backends, because the lifetime of the default
+	// backend is tied to the last/first loadbalancer not the life of the
+	// nodeport service or Ingress.
+	healthCheckers []healthchecks.HealthChecker
+}
+
+// Init initializes the cluster manager.
+func (c *ClusterManager) Init(tr *GCETranslator) {
+	c.instancePool.Init(tr)
+	for _, h := range c.healthCheckers {
+		h.Init(tr)
+	}
+	// TODO: Initialize other members as needed.
 }
 
 // IsHealthy returns an error if the cluster manager is unhealthy.
@@ -184,13 +203,13 @@ func defaultInstanceGroupName(clusterName string) string {
 	return fmt.Sprintf("%v-%v", instanceGroupPrefix, clusterName)
 }
 
-func getGCEClient() *gce.GCECloud {
+func getGCEClient(config io.Reader) *gce.GCECloud {
 	// Creating the cloud interface involves resolving the metadata server to get
 	// an oauth token. If this fails, the token provider assumes it's not on GCE.
 	// No errors are thrown. So we need to keep retrying till it works because
 	// we know we're on GCE.
 	for {
-		cloudInterface, err := cloudprovider.GetCloudProvider("gce", nil)
+		cloudInterface, err := cloudprovider.GetCloudProvider("gce", config)
 		if err == nil {
 			cloud := cloudInterface.(*gce.GCECloud)
 
@@ -215,33 +234,52 @@ func getGCEClient() *gce.GCECloud {
 //   string passed to glbc via --gce-cluster-name.
 // - defaultBackendNodePort: is the node port of glbc's default backend. This is
 //	 the kubernetes Service that serves the 404 page if no urls match.
-// - defaultHealthCheckPath: is the default path used for L7 health checks, eg: "/healthz"
+// - defaultHealthCheckPath: is the default path used for L7 health checks, eg: "/healthz".
 func NewClusterManager(
+	configFilePath string,
 	name string,
 	defaultBackendNodePort int64,
 	defaultHealthCheckPath string) (*ClusterManager, error) {
+
+	var config *os.File
+	var err error
+	if configFilePath != "" {
+		glog.Infof("Reading config from path %v", configFilePath)
+		config, err = os.Open(configFilePath)
+		if err != nil {
+			return nil, err
+		}
+		defer config.Close()
+	}
 
 	// TODO: Make this more resilient. Currently we create the cloud client
 	// and pass it through to all the pools. This makes unittesting easier.
 	// However if the cloud client suddenly fails, we should try to re-create it
 	// and continue.
-	cloud := getGCEClient()
+	cloud := getGCEClient(config)
+	glog.Infof("Successfully loaded cloudprovider using config %q", configFilePath)
 
-	cluster := ClusterManager{ClusterNamer: utils.Namer{name}}
-	zone, err := cloud.GetZone()
-	if err != nil {
-		return nil, err
-	}
-	cluster.instancePool = instances.NewNodePool(cloud, zone.FailureDomain)
+	// Names are fundamental to the cluster, the uid allocator makes sure names don't collide.
+	cluster := ClusterManager{ClusterNamer: &utils.Namer{name}}
+
+	// NodePool stores GCE vms that are in this Kubernetes cluster.
+	cluster.instancePool = instances.NewNodePool(cloud)
+
+	// BackendPool creates GCE BackendServices and associated health checks.
 	healthChecker := healthchecks.NewHealthChecker(cloud, defaultHealthCheckPath, cluster.ClusterNamer)
+	// Loadbalancer pool manages the default backend and its health check.
+	defaultBackendHealthChecker := healthchecks.NewHealthChecker(cloud, "/healthz", cluster.ClusterNamer)
+
+	cluster.healthCheckers = []healthchecks.HealthChecker{healthChecker, defaultBackendHealthChecker}
 
 	// TODO: This needs to change to a consolidated management of the default backend.
 	cluster.backendPool = backends.NewBackendPool(
 		cloud, healthChecker, cluster.instancePool, cluster.ClusterNamer, []int64{defaultBackendNodePort}, true)
-	defaultBackendHealthChecker := healthchecks.NewHealthChecker(cloud, "/healthz", cluster.ClusterNamer)
 	defaultBackendPool := backends.NewBackendPool(
 		cloud, defaultBackendHealthChecker, cluster.instancePool, cluster.ClusterNamer, []int64{}, false)
 	cluster.defaultBackendNodePort = defaultBackendNodePort
+
+	// L7 pool creates targetHTTPProxy, ForwardingRules, UrlMaps, StaticIPs.
 	cluster.l7Pool = loadbalancers.NewLoadBalancerPool(
 		cloud, defaultBackendPool, defaultBackendNodePort, cluster.ClusterNamer)
 	cluster.firewallPool = firewalls.NewFirewallPool(cloud, cluster.ClusterNamer)

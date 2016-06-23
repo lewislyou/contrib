@@ -17,6 +17,7 @@ limitations under the License.
 package simulator
 
 import (
+	"flag"
 	"fmt"
 	"math"
 
@@ -29,56 +30,91 @@ import (
 	"github.com/golang/glog"
 )
 
-// FindNodeToRemove finds a node that can be removed.
-func FindNodeToRemove(candidates []*kube_api.Node, allNodes []*kube_api.Node, pods []*kube_api.Pod,
-	client *kube_client.Client) (*kube_api.Node, error) {
+var (
+	skipNodesWithSystemPods = flag.Bool("skip-nodes-with-system-pods", true,
+		"If true cluster autoscaler will never delete nodes with pods from kube-system (except for DeamonSet "+
+			"or mirror pods)")
+	skipNodesWithLocalStorage = flag.Bool("skip-nodes-with-local-storage", true,
+		"If true cluster autoscaler will never delete nodes with pods with local storage, e.g. EmptyDir or HostPath")
+)
 
-	for _, node := range candidates {
-		glog.V(2).Infof("Considering %s for removal", node.Name)
+// FindNodesToRemove finds nodes that can be removed.
+func FindNodesToRemove(candidates []*kube_api.Node, allNodes []*kube_api.Node, pods []*kube_api.Pod,
+	client *kube_client.Client, predicateChecker *PredicateChecker, maxCount int,
+	fastCheck bool) ([]*kube_api.Node, error) {
 
-		podsToRemoveList, _, _, err := cmd.GetPodsForDeletionOnNodeDrain(client, node.Name,
-			kube_api.Codecs.UniversalDecoder(), false, true)
-
-		if err != nil {
-			glog.V(1).Infof("Node %s cannot be removed: %v", node.Name, err)
-			continue
+	nodeNameToNodeInfo := schedulercache.CreateNodeNameToInfoMap(pods)
+	for _, node := range allNodes {
+		if nodeInfo, found := nodeNameToNodeInfo[node.Name]; found {
+			nodeInfo.SetNode(node)
 		}
+	}
+	result := make([]*kube_api.Node, 0)
 
-		tempNodeNameToNodeInfo := schedulercache.CreateNodeNameToInfoMap(pods)
-		delete(tempNodeNameToNodeInfo, node.Name)
-		for _, tempnode := range allNodes {
-			if nodeInfo, found := tempNodeNameToNodeInfo[tempnode.Name]; found {
-				nodeInfo.SetNode(tempnode)
+	evaluationType := "Detailed evaluation"
+	if fastCheck {
+		evaluationType = "Fast evaluation"
+	}
+
+candidateloop:
+	for _, node := range candidates {
+		glog.V(2).Infof("%s: %s for removal", evaluationType, node.Name)
+
+		var podsToRemove []*kube_api.Pod
+		var err error
+
+		if fastCheck {
+			if nodeInfo, found := nodeNameToNodeInfo[node.Name]; found {
+				podsToRemove, err = FastGetPodsToMove(nodeInfo, false, *skipNodesWithSystemPods, *skipNodesWithLocalStorage, kube_api.Codecs.UniversalDecoder())
+				if err != nil {
+					glog.V(2).Infof("%s: node %s cannot be removed: %v", evaluationType, node.Name, err)
+					continue candidateloop
+				}
+			} else {
+				glog.V(2).Infof("%s: nodeInfo for %s not found", evaluationType, node.Name)
+				continue candidateloop
+			}
+		} else {
+			drainResult, _, _, err := cmd.GetPodsForDeletionOnNodeDrain(client, node.Name,
+				kube_api.Codecs.UniversalDecoder(), false, true)
+
+			if err != nil {
+				glog.V(2).Infof("%s: node %s cannot be removed: %v", evaluationType, node.Name, err)
+				continue candidateloop
+			}
+			podsToRemove = make([]*kube_api.Pod, 0, len(drainResult))
+			for i := range drainResult {
+				podsToRemove = append(podsToRemove, &drainResult[i])
 			}
 		}
-		ptrPodsToRemove := make([]*kube_api.Pod, 0, len(podsToRemoveList))
-		for i := range podsToRemoveList {
-			ptrPodsToRemove = append(ptrPodsToRemove, &podsToRemoveList[i])
-		}
-
-		findProblems := findPlaceFor(ptrPodsToRemove, allNodes, tempNodeNameToNodeInfo)
+		findProblems := findPlaceFor(node.Name, podsToRemove, allNodes, nodeNameToNodeInfo, predicateChecker)
 		if findProblems == nil {
-			return node, nil
+			result = append(result, node)
+			glog.V(2).Infof("%s: node %s may be removed", evaluationType, node.Name)
+			if len(result) >= maxCount {
+				break candidateloop
+			}
+		} else {
+			glog.V(2).Infof("%s: node %s is not suitable for removal %v", evaluationType, node.Name, err)
 		}
-		glog.Infof("Node %s is not suitable for removal %v", node.Name, err)
 	}
-	return nil, nil
+	return result, nil
 }
 
-// CalculateReservation calculates reservation of a node.
-func CalculateReservation(node *kube_api.Node, nodeInfo *schedulercache.NodeInfo) (float64, error) {
-	cpu, err := calculateReservationOfResource(node, nodeInfo, kube_api.ResourceCPU)
+// CalculateUtilization calculates utilization of a node, defined as total amount of requested resources divided by capacity.
+func CalculateUtilization(node *kube_api.Node, nodeInfo *schedulercache.NodeInfo) (float64, error) {
+	cpu, err := calculateUtilizationOfResource(node, nodeInfo, kube_api.ResourceCPU)
 	if err != nil {
 		return 0, err
 	}
-	mem, err := calculateReservationOfResource(node, nodeInfo, kube_api.ResourceMemory)
+	mem, err := calculateUtilizationOfResource(node, nodeInfo, kube_api.ResourceMemory)
 	if err != nil {
 		return 0, err
 	}
 	return math.Max(cpu, mem), nil
 }
 
-func calculateReservationOfResource(node *kube_api.Node, nodeInfo *schedulercache.NodeInfo, resourceName kube_api.ResourceName) (float64, error) {
+func calculateUtilizationOfResource(node *kube_api.Node, nodeInfo *schedulercache.NodeInfo, resourceName kube_api.ResourceName) (float64, error) {
 	nodeCapacity, found := node.Status.Capacity[resourceName]
 	if !found {
 		return 0, fmt.Errorf("Failed to get %v from %s", resourceName, node.Name)
@@ -98,31 +134,50 @@ func calculateReservationOfResource(node *kube_api.Node, nodeInfo *schedulercach
 }
 
 // TODO: We don't need to pass list of nodes here as they are already available in nodeInfos.
-func findPlaceFor(pods []*kube_api.Pod, nodes []*kube_api.Node, nodeInfos map[string]*schedulercache.NodeInfo) error {
-	predicateChecker := NewPredicateChecker()
-	for _, pod := range pods {
+func findPlaceFor(bannedNode string, pods []*kube_api.Pod, nodes []*kube_api.Node, nodeInfos map[string]*schedulercache.NodeInfo,
+	predicateChecker *PredicateChecker) error {
+
+	newNodeInfos := make(map[string]*schedulercache.NodeInfo)
+
+	for _, podptr := range pods {
+		newpod := *podptr
+		newpod.Spec.NodeName = ""
+		pod := &newpod
+
 		foundPlace := false
 		glog.V(4).Infof("Looking for place for %s/%s", pod.Namespace, pod.Name)
+		podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
 
-		// TODO: Sort nodes by reservation
+		// TODO: Sort nodes by utilization
 	nodeloop:
 		for _, node := range nodes {
+			if node.Name == bannedNode {
+				continue
+			}
+
 			node.Status.Allocatable = node.Status.Capacity
-			if nodeInfo, found := nodeInfos[node.Name]; found {
+			nodeInfo, found := newNodeInfos[node.Name]
+			if !found {
+				nodeInfo, found = nodeInfos[node.Name]
+			}
+
+			if found {
 				err := predicateChecker.CheckPredicates(pod, nodeInfo)
-				glog.V(4).Infof("Evaluation %s for %s/%s -> %v", node.Name, pod.Namespace, pod.Name, err)
+				glog.V(4).Infof("Evaluation %s for %s -> %v", node.Name, podKey, err)
 				if err == nil {
 					foundPlace = true
 					// TODO(mwielgus): Optimize it.
 					podsOnNode := nodeInfo.Pods()
 					podsOnNode = append(podsOnNode, pod)
-					nodeInfos[node.Name] = schedulercache.NewNodeInfo(podsOnNode...)
+					newNodeInfo := schedulercache.NewNodeInfo(podsOnNode...)
+					newNodeInfo.SetNode(node)
+					newNodeInfos[node.Name] = newNodeInfo
 					break nodeloop
 				}
 			}
 		}
 		if !foundPlace {
-			return fmt.Errorf("failed to find place for %s/%s", pod.Namespace, pod.Name)
+			return fmt.Errorf("failed to find place for %s", podKey)
 		}
 	}
 	return nil

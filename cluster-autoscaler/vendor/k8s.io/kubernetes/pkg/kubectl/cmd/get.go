@@ -92,6 +92,7 @@ func NewCmdGet(f *cmdutil.Factory, out io.Writer) *cobra.Command {
 			err := RunGet(f, out, cmd, args, options)
 			cmdutil.CheckErr(err)
 		},
+		SuggestFor: []string{"list", "ps"},
 		ValidArgs:  validArgs,
 		ArgAliases: argAliases,
 	}
@@ -218,15 +219,8 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 		return err
 	}
 
-	infos := []*resource.Info{}
 	allErrs := []error{}
-	err = r.Visit(func(info *resource.Info, err error) error {
-		if err != nil {
-			return err
-		}
-		infos = append(infos, info)
-		return nil
-	})
+	infos, err := r.Infos()
 	if err != nil {
 		allErrs = append(allErrs, err)
 	}
@@ -246,7 +240,7 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 		if err != nil {
 			return err
 		}
-		obj, err := resource.AsVersionedObject(infos, !singular, version.String(), f.JSONEncoder())
+		obj, err := resource.AsVersionedObject(infos, !singular, version, f.JSONEncoder())
 		if err != nil {
 			return err
 		}
@@ -273,7 +267,7 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 		}
 
 		for ix := range infos {
-			objs[ix], err = infos[ix].Mapping.ConvertToVersion(infos[ix].Object, version.String())
+			objs[ix], err = infos[ix].Mapping.ConvertToVersion(infos[ix].Object, version)
 			if err != nil {
 				allErrs = append(allErrs, err)
 				continue
@@ -321,5 +315,5 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 			continue
 		}
 	}
-	return utilerrors.NewAggregate(allErrs)
+	return utilerrors.Flatten(utilerrors.NewAggregate(allErrs))
 }

@@ -67,7 +67,7 @@ type L7s struct {
 	glbcDefaultBackend     *compute.BackendService
 	defaultBackendPool     backends.BackendPool
 	defaultBackendNodePort int64
-	namer                  utils.Namer
+	namer                  *utils.Namer
 }
 
 // NewLoadBalancerPool returns a new loadbalancer pool.
@@ -80,7 +80,7 @@ type L7s struct {
 func NewLoadBalancerPool(
 	cloud LoadBalancers,
 	defaultBackendPool backends.BackendPool,
-	defaultBackendNodePort int64, namer utils.Namer) LoadBalancerPool {
+	defaultBackendNodePort int64, namer *utils.Namer) LoadBalancerPool {
 	return &L7s{cloud, storage.NewInMemoryPool(), nil, defaultBackendPool, defaultBackendNodePort, namer}
 }
 
@@ -284,7 +284,7 @@ type L7 struct {
 	// TODO: Expose this to users.
 	glbcDefaultBackend *compute.BackendService
 	// namer is used to compute names of the various sub-components of an L7.
-	namer utils.Namer
+	namer *utils.Namer
 }
 
 func (l *L7) checkUrlMap(backend *compute.BackendService) (err error) {
@@ -344,6 +344,7 @@ func (l *L7) deleteOldSSLCert() (err error) {
 			return err
 		}
 	}
+	l.oldSSLCert = nil
 	return nil
 }
 
@@ -368,7 +369,7 @@ func (l *L7) checkSSLCert() (err error) {
 	cert, _ := l.cloud.GetSslCertificate(certName)
 
 	// PrivateKey is write only, so compare certs alone. We're assuming that
-	// no one will change just the key. We can remembe the key and compare,
+	// no one will change just the key. We can remember the key and compare,
 	// but a bug could end up leaking it, which feels worse.
 	if cert == nil || ingCert != cert.Certificate {
 

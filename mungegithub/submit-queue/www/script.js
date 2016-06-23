@@ -10,19 +10,18 @@ app.controller('SQCntl', ['DataService', '$interval', '$location', SQCntl]);
 function SQCntl(dataService, $interval, $location) {
   var self = this;
   self.prs = {};
-  self.users = {};
-  self.builds = {};
   self.health = {};
+  self.testResults = {};
   self.lastMergeTime = Date();
   self.prQuerySearch = prQuerySearch;
   self.historyQuerySearch = historyQuerySearch;
   self.goToPerson = goToPerson;
   self.selectTab = selectTab;
   self.tabLoaded = {};
+  self.functionLoading = {};
   self.queryNum = 0;
   self.selected = 1;
   self.OverallHealth = "";
-  self.StartTime = "";
   self.StatOrder = "-Count";
   self.location = $location;
 
@@ -61,32 +60,49 @@ function SQCntl(dataService, $interval, $location) {
   // Defer loading of data for a tab until it's actually needed.
   // This speeds up the first-boot experience a LOT.
   function loadTab() {
-    // tab: [reloading-function, update interval in minutes, ...] (can repeat)
+    // reloadFunctions is a map from functions to how often they should run (in minutes)
+    var reloadFunctions = {}
+    reloadFunctions[refreshPRs] = 10;
+    reloadFunctions[refreshGithubE2E] = 0.5;
+    reloadFunctions[refreshSQStats] = 30;
+    reloadFunctions[refreshHistoryPRs] = 1;
+    reloadFunctions[refreshE2EHealth] = 10;
+    reloadFunctions[refreshBotStats] = 10;
+
+    // tabFunctionReloads is a map of which tabs need which functions to refresh
     var tabFunctionReloads = {
-      0: [refreshPRs, 10],
-      1: [refreshGithubE2E, 0.5, refreshSQStats, 30],
-      2: [refreshHistoryPRs, 1],
-      3: [refreshE2EHealth, 10],
-      4: [refreshUsers, 15, refreshBotStats, 10],
+      0: [refreshPRs],
+      1: [refreshGithubE2E, refreshSQStats],
+      2: [refreshHistoryPRs],
+      3: [refreshE2EHealth, refreshSQStats],
+      4: [refreshSQStats, refreshBotStats],
     }
-    if (self.tabLoaded[self.selected])
+    if (self.tabLoaded[self.selected]) {
       return;
-    var tabReload = tabFunctionReloads[self.selected];
-    if (tabReload !== undefined) {
-      for (var i = 0; i < tabReload.length; i += 2) {
-        var func = tabReload[i];
-        var updateIntervalMinutes = tabReload[i + 1];
-        func();
-        $interval(func, updateIntervalMinutes * 60 * 1000);
+    }
+    self.tabLoaded[self.selected] = true;
+
+    var reloadFuncs = tabFunctionReloads[self.selected];
+    if (reloadFuncs === undefined)
+      return;
+
+    for (var i = 0; i < reloadFuncs.length; i++) {
+      var func = reloadFuncs[i];
+      if (self.functionLoading[func] == true) {
+        continue;
       }
-      self.tabLoaded[self.selected] = true;
+      self.functionLoading[func] = true;
+
+      var updateIntervalMinutes = reloadFunctions[func];
+      func();
+      $interval(func, updateIntervalMinutes * 60 * 1000);
     }
   }
 
   // This data is shown in a top banner (when the Queue is blocked),
   // so it's always loaded.
-  refreshGoogleInternalCI();
-  $interval(refreshGoogleInternalCI, 60000);  // Refresh every minute
+  refreshContinuousTests();
+  $interval(refreshContinuousTests, 60000);  // Refresh every minute
 
   // Request Avatars that are only as large necessary (CSS limits them to 40px)
   function fixPRAvatars(prs) {
@@ -138,22 +154,7 @@ function SQCntl(dataService, $interval, $location) {
 
   function refreshBotStats() {
     dataService.getData('stats').then(function successCallback(response) {
-      var nextLoop = new Date(response.data.NextLoopTime);
-      document.getElementById("next-run-time").innerHTML = nextLoop.toLocaleTimeString();
-
-      self.botStats = response.data.Analytics;
-      self.APICount = response.data.APICount;
-      self.CachedAPICount = response.data.CachedAPICount;
-      document.getElementById("api-calls-per-sec").innerHTML = response.data.APIPerSec;
-      document.getElementById("github-api-limit-count").innerHTML = response.data.LimitRemaining;
-      var nextReset = new Date(response.data.LimitResetTime);
-      document.getElementById("github-api-limit-reset").innerHTML = nextReset.toLocaleTimeString();
-    });
-  }
-
-  function refreshUsers() {
-    dataService.getData('users').then(function successCallback(response) {
-      self.users = response.data;
+      self.botStats = response.data;
     });
   }
 
@@ -163,55 +164,103 @@ function SQCntl(dataService, $interval, $location) {
       if (self.health.TotalLoops !== 0) {
         var percentStable = self.health.NumStable * 100.0 / self.health.TotalLoops;
         self.OverallHealth = Math.round(percentStable) + "%";
-        self.StartTime = new Date(self.health.StartTime).toLocaleString();
       }
-      updateBuildStability(self.builds, self.health);
+      updateBuildStability(self.testResults.blockingBuilds, self.testResults.nonBlockingBuilds, self.health);
     });
   }
 
-  function refreshGoogleInternalCI() {
+  function refreshContinuousTests() {
     dataService.getData('google-internal-ci').then(function successCallback(response) {
-      var result = getE2E(response.data);
-      self.builds = result.builds;
-      updateBuildStability(self.builds, self.health);
-      self.failedBuild = result.failedBuild;
+      self.testResults = processTests(response.data);
+      updateBuildStability(self.testResults.blockingBuilds, self.testResults.nonBlockingBuilds, self.health);
     });
   }
 
-  function getE2E(builds) {
-    var result = [];
-    var failedBuild = false;
+  function processTests(builds) {
+    var blockingResult = [];
+    var nonBlockingResult = [];
+    var redBuilds = false;
+    var yellowBuilds = false;
     angular.forEach(builds, function(job, key) {
       var obj = {
         'name': key,
         'id': job.ID,
       };
-      if (job.Status == 'Stable') {
-        // green check mark
-        obj.state = '\u2713';
-        obj.color = 'green';
-      } else if (job.Status == 'Not Stable') {
-        // red X mark
-        obj.state = '\u2716';
-        obj.color = 'red';
-        failedBuild = true;
-      } else {
-        obj.state = 'Error';
-        obj.color = 'red';
-        obj.msg = job.Status;
-        failedBuild = true;
+      switch (job.Status) {
+        case 'Stable':
+          // green check mark
+          obj.state = '\u2713';
+          obj.color = 'green';
+          break;
+        case 'Not Stable':
+          // red X mark
+          obj.state = '\u2716';
+          obj.color = 'red';
+          redBuilds = true;
+          break;
+        case 'Ignorable flake':
+          // orange X mark
+          obj.state = '\u2716';
+          obj.color = '#FF8A65';
+          obj.msg = 'Flake!';
+          yellowBuilds = true;
+          break;
+        case 'Problem Resolved':
+          // orange X mark
+          obj.state = '\u2716';
+          obj.color = '#FF8A65';
+          obj.msg = 'Manual override';
+          yellowBuilds = true;
+          break;
+        case '[nonblocking] Stable':
+          // green check mark
+          obj.state = '\u2713';
+          obj.color = 'green';
+          obj.msg = '[nonblocking]';
+          break;
+        case '[nonblocking] Not Stable':
+          // orange X mark
+          obj.state = '\u2716';
+          obj.color = '#FF8A65';
+          obj.msg = '[nonblocking]';
+          break;
+        case '[nonblocking] Ignorable flake':
+          // orange X mark
+          obj.state = '\u2716';
+          obj.color = '#FF8A65';
+          obj.msg = '[nonblocking] Flake!';
+          break;
+        default:
+          obj.state = 'Error';
+          obj.color = 'red';
+          obj.msg = job.Status;
+          redBuilds = true;
       }
       obj.stability = '';
-      result.push(obj);
+      if (!obj.msg) {
+        blockingResult.push(obj);
+      } else {
+        if (obj.msg.includes('[nonblocking]')) {
+          obj.msg = obj.msg.replace('[nonblocking]', '');
+          nonBlockingResult.push(obj);
+        } else {
+          blockingResult.push(obj);
+        }
+      }
     });
+    if (redBuilds) {
+      yellowBuilds = false;
+    }
     return {
-      builds: result,
-      failedBuild: failedBuild,
+      blockingBuilds: blockingResult,
+      nonBlockingBuilds: nonBlockingResult,
+      yellowBuilds: yellowBuilds,
+      redBuilds: redBuilds,
     };
   }
 
-  function updateBuildStability(builds, health) {
-    if (Object.keys(builds).length === 0 ||
+  function updateBuildStabilityHelper(builds, health) {
+    if (builds === undefined || Object.keys(builds).length === 0 ||
         health.TotalLoops === 0 || health.NumStablePerJob === undefined) {
       return;
     }
@@ -222,6 +271,11 @@ function SQCntl(dataService, $interval, $location) {
         build.stability = Math.round(percentStable) + "%"
       }
     });
+  }
+
+  function updateBuildStability(blockingBuilds, nonBlockingBuilds, health) {
+    updateBuildStabilityHelper(blockingBuilds, health);
+    updateBuildStabilityHelper(nonBlockingBuilds, health);
   }
 
   function searchTermsContain(terms, value) {
@@ -300,7 +354,6 @@ function SQCntl(dataService, $interval, $location) {
   }
 
   function goToPerson(person) {
-    console.log(person);
     window.location.href = 'https://github.com/' + person;
   }
 
