@@ -194,11 +194,11 @@ func (ipvsc *ipvsControllerController) getServices() []vip {
 
 		s := svcObj.(*api.Service)
 		for _, servicePort := range s.Spec.Ports {
-            		np := servicePort.NodePort
-           		if np == 0 {
-           		    	glog.Infof("No nodePort found for service %v, port %+v", s.Name, servicePort)
-                		continue
-            		}
+			np := servicePort.NodePort
+			if np == 0 {
+				glog.Infof("No nodePort found for service %v, port %+v", s.Name, servicePort)
+				continue
+			}
 
 			ep := ipvsc.getEndpoints(s, &servicePort)
 			if len(ep) == 0 {
