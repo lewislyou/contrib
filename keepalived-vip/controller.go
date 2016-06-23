@@ -168,12 +168,12 @@ func (ipvsc *ipvsControllerController) getServices() []vip {
 	// k -> IP to use
 	// v -> <namespace>/<service name>:<lvs method>
 	for externalIPIndex, nsSvcLvs := range cfgMap.Data {
-        	var externalIP string
-        	if colonIndex := strings.Index(externalIPIndex, "-"); colonIndex < 0 {
-            		externalIP = externalIPIndex
-        	} else {
-            		externalIP = externalIPIndex[:colonIndex]
-        	}
+		var externalIP string
+		if colonIndex := strings.Index(externalIPIndex, "-"); colonIndex < 0 {
+			externalIP = externalIPIndex
+		} else {
+			externalIP = externalIPIndex[:colonIndex]
+		}
 		ns, svc, lvsm, err := parseNsSvcLVS(nsSvcLvs)
 		if err != nil {
 			glog.Warningf("%v", err)
@@ -194,6 +194,12 @@ func (ipvsc *ipvsControllerController) getServices() []vip {
 
 		s := svcObj.(*api.Service)
 		for _, servicePort := range s.Spec.Ports {
+            		np := servicePort.NodePort
+           		if np == 0 {
+           		    	glog.Infof("No nodePort found for service %v, port %+v", s.Name, servicePort)
+                		continue
+            		}
+
 			ep := ipvsc.getEndpoints(s, &servicePort)
 			if len(ep) == 0 {
 				glog.Warningf("no endpoints found for service %v, port %+v", s.Name, servicePort)
@@ -205,12 +211,12 @@ func (ipvsc *ipvsControllerController) getServices() []vip {
 			svcs = append(svcs, vip{
 				Name:      fmt.Sprintf("%v/%v", s.Namespace, s.Name),
 				IP:        externalIP,
-				Port:      servicePort.Port,
+				Port:      servicePort.NodePort,
 				LVSMethod: lvsm,
 				Backends:  ep,
 				Protocol:  fmt.Sprintf("%v", servicePort.Protocol),
 			})
-			glog.V(2).Infof("found service: %v:%v", s.Name, servicePort.Port)
+			glog.V(2).Infof("Found service: %v %v %v:%v->%v:%v", s.Name, servicePort.Protocol, externalIP, servicePort.NodePort, s.Spec.ClusterIP, servicePort.Port)
 		}
 	}
 
