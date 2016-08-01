@@ -1,10 +1,35 @@
 Changelog
 
-### next
+### 0.8.2
+
+- [X] [#1336](https://github.com/kubernetes/contrib/pull/1336) Add annotation to skip ingress rule
+- [X] [#1338](https://github.com/kubernetes/contrib/pull/1338) Add HTTPS default backend
+- [X] [#1351](https://github.com/kubernetes/contrib/pull/1351) Avoid generation of invalid ssl certificates
+- [X] [#1379](https://github.com/kubernetes/contrib/pull/1379) improve nginx performance
+- [X] [#1350](https://github.com/kubernetes/contrib/pull/1350) Improve performance (listen backlog=net.core.somaxconn)
+- [X] [#1384](https://github.com/kubernetes/contrib/pull/1384) Unset Authorization header when proxying
+- [X] [#1398](https://github.com/kubernetes/contrib/pull/1398) Mitigate HTTPoxy Vulnerability
+
+### 0.8.1
+
+- [X] [#1317](https://github.com/kubernetes/contrib/pull/1317) Fix duplicated real_ip_header
+- [X] [#1315](https://github.com/kubernetes/contrib/pull/1315) Addresses #1314
+
+### 0.8
 
 - [X] [#1063](https://github.com/kubernetes/contrib/pull/1063) watches referenced tls secrets
 - [X] [#850](https://github.com/kubernetes/contrib/pull/850) adds configurable SSL redirect nginx controller
-- [ ] [#1136](https://github.com/kubernetes/contrib/pull/1136) Fix nginx rewrite rule order
+- [X] [#1136](https://github.com/kubernetes/contrib/pull/1136) Fix nginx rewrite rule order
+- [X] [#1144](https://github.com/kubernetes/contrib/pull/1144) Add cidr whitelist support
+- [X] [#1230](https://github.com/kubernetes/contrib/pull/1130) Improve docs and examples
+- [X] [#1258](https://github.com/kubernetes/contrib/pull/1258) Avoid sync without a reachable 
+- [X] [#1235](https://github.com/kubernetes/contrib/pull/1235) Fix stats by country in nginx status page
+- [X] [#1236](https://github.com/kubernetes/contrib/pull/1236) Update nginx to add dynamic TLS records and spdy
+- [X] [#1238](https://github.com/kubernetes/contrib/pull/1238) Add support for dynamic TLS records and spdy
+- [X] [#1239](https://github.com/kubernetes/contrib/pull/1239) Add support for conditional log of urls
+- [X] [#1253](https://github.com/kubernetes/contrib/pull/1253) Use delayed queue
+- [X] [#1296](https://github.com/kubernetes/contrib/pull/1296) Fix formatting
+- [X] [#1299](https://github.com/kubernetes/contrib/pull/1299) Fix formatting
 
 ### 0.7
 

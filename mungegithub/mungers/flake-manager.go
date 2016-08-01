@@ -18,6 +18,7 @@ package mungers
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"k8s.io/contrib/mungegithub/features"
@@ -27,14 +28,21 @@ import (
 	"k8s.io/contrib/mungegithub/mungers/testowner"
 	"k8s.io/contrib/test-utils/utils"
 
+	"time"
+
 	"github.com/golang/glog"
 	libgithub "github.com/google/go-github/github"
 	"github.com/spf13/cobra"
-	"time"
 )
 
 // failedStr is for comment matching during auto prioritization
 const failedStr = "Failed: "
+
+var (
+	// pullRE is a regexp that will extract the PR# from a path to a flake
+	// that happened on a PR.
+	pullRE = regexp.MustCompile("pull/([0-9]+)/")
+)
 
 // issueFinder finds an issue for a given key.
 type issueFinder interface {
@@ -52,6 +60,7 @@ type FlakeManager struct {
 
 	syncer    *sync.IssueSyncer
 	ownerPath string
+	features  *features.Features
 }
 
 func init() {
@@ -62,10 +71,12 @@ func init() {
 func (p *FlakeManager) Name() string { return "flake-manager" }
 
 // RequiredFeatures is a slice of 'features' that must be provided
-func (p *FlakeManager) RequiredFeatures() []string { return nil }
+func (p *FlakeManager) RequiredFeatures() []string { return []string{features.GCSFeature} }
 
 // Initialize will initialize the munger
 func (p *FlakeManager) Initialize(config *github.Config, features *features.Features) error {
+	glog.Infof("test-owners-csv: %#v\n", p.ownerPath)
+
 	// TODO: don't get the mungers from the global list, they should be passed in...
 	for _, m := range GetAllMungers() {
 		if m.Name() == "issue-cacher" {
@@ -82,7 +93,10 @@ func (p *FlakeManager) Initialize(config *github.Config, features *features.Feat
 		return fmt.Errorf("submit-queue not found")
 	}
 	p.config = config
-	p.googleGCSBucketUtils = utils.NewUtils(utils.KubekinsBucket, utils.LogDir)
+	p.googleGCSBucketUtils = utils.NewWithPresubmitDetection(
+		features.GCSInfo.BucketName, features.GCSInfo.LogDir,
+		features.GCSInfo.PullKey, features.GCSInfo.PullLogDir,
+	)
 
 	var owner sync.OwnerMapper
 	var err error
@@ -197,8 +211,12 @@ func (p *individualFlakeSource) ID() string {
 
 // Body implements IssueSource
 func (p *individualFlakeSource) Body(newIssue bool) string {
+	id := p.ID()
 	extraInfo := fmt.Sprintf(failedStr+"%v\n\n```\n%v\n```\n\n", p.Title(), p.flake.Reason)
-	body := makeGubernatorLink(p.ID()) + "\n" + extraInfo
+	if parts := pullRE.FindStringSubmatch(id); len(parts) > 1 {
+		extraInfo += fmt.Sprintf("Happened on a presubmit run in #%v.\n\n", parts[1])
+	}
+	body := makeGubernatorLink(id) + "\n" + extraInfo
 
 	if !newIssue {
 		return body
@@ -300,7 +318,7 @@ func (p *brokenJobSource) Priority(obj *github.MungeObject) (sync.Priority, erro
 }
 
 // autoPrioritize prioritize flake issue based on the number of flakes
-func autoPrioritize(comments []libgithub.IssueComment, issueCreatedAt *time.Time) sync.Priority {
+func autoPrioritize(comments []*libgithub.IssueComment, issueCreatedAt *time.Time) sync.Priority {
 	occurence := []*time.Time{issueCreatedAt}
 	lastMonth := time.Now().Add(-1 * 30 * 24 * time.Hour)
 	lastWeek := time.Now().Add(-1 * 7 * 24 * time.Hour)

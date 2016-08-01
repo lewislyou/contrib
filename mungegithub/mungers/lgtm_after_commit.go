@@ -17,6 +17,9 @@ limitations under the License.
 package mungers
 
 import (
+	"fmt"
+	"regexp"
+
 	"k8s.io/contrib/mungegithub/features"
 	"k8s.io/contrib/mungegithub/github"
 
@@ -26,7 +29,11 @@ import (
 )
 
 const (
-	lgtmRemovedBody = "PR changed after LGTM, removing LGTM."
+	lgtmRemovedBody = "PR changed after LGTM, removing LGTM. %s"
+)
+
+var (
+	lgtmRemovedRegex = regexp.MustCompile("PR changed after LGTM, removing LGTM.")
 )
 
 // LGTMAfterCommitMunger will remove the LGTM flag from an PR which has been
@@ -76,18 +83,19 @@ func (LGTMAfterCommitMunger) Munge(obj *github.MungeObject) {
 
 	if lastModified.After(*lgtmTime) {
 		glog.Infof("PR: %d lgtm:%s  lastModified:%s", *obj.Issue.Number, lgtmTime.String(), lastModified.String())
-		if err := obj.WriteComment(lgtmRemovedBody); err != nil {
+		body := fmt.Sprintf(lgtmRemovedBody, mentionUsers(getInvolvedUsers(obj)))
+		if err := obj.WriteComment(body); err != nil {
 			return
 		}
 		obj.RemoveLabel(lgtmLabel)
 	}
 }
 
-func (LGTMAfterCommitMunger) isStaleComment(obj *github.MungeObject, comment githubapi.IssueComment) bool {
+func (LGTMAfterCommitMunger) isStaleComment(obj *github.MungeObject, comment *githubapi.IssueComment) bool {
 	if !mergeBotComment(comment) {
 		return false
 	}
-	if *comment.Body != lgtmRemovedBody {
+	if !lgtmRemovedRegex.MatchString(*comment.Body) {
 		return false
 	}
 	if !obj.HasLabel("lgtm") {
@@ -105,6 +113,6 @@ func (LGTMAfterCommitMunger) isStaleComment(obj *github.MungeObject, comment git
 }
 
 // StaleComments returns a list of comments which are stale
-func (l LGTMAfterCommitMunger) StaleComments(obj *github.MungeObject, comments []githubapi.IssueComment) []githubapi.IssueComment {
+func (l LGTMAfterCommitMunger) StaleComments(obj *github.MungeObject, comments []*githubapi.IssueComment) []*githubapi.IssueComment {
 	return forEachCommentTest(obj, comments, l.isStaleComment)
 }
