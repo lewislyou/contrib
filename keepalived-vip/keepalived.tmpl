@@ -5,6 +5,11 @@ global_defs {
   vrrp_iptables {{ .iptablesChain }}
 }
 
+local_address_group laddr_g1 {
+  {{ range .lips }}
+  {{ . }}{{ end }}
+}
+
 vrrp_instance vips {
   state BACKUP
   interface {{ $iface }}
@@ -37,6 +42,8 @@ virtual_server {{ $svc.IP }} {{ $svc.Port }} {
   lvs_method {{ $svc.LVSMethod }}
   persistence_timeout 1800
   protocol {{ $svc.Protocol }}
+  syn_proxy
+  laddr_group_name laddr_g1
 
   {{ range $j, $backend := $svc.Backends }}
   real_server {{ $backend.IP }} {{ $backend.Port }} {

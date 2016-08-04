@@ -22,10 +22,10 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+    "strings"
 
 	"github.com/golang/glog"
 	"github.com/spf13/pflag"
-
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/unversioned"
 	kubectl_util "k8s.io/kubernetes/pkg/kubectl/cmd/util"
@@ -46,15 +46,23 @@ var (
 		The key in the map indicates the external IP to use. The value is the name of the 
 		service with the format namespace/serviceName and the port of the service could be a number or the
 		name of the port.`)
+    localIPs = flags.String("use-local-addresses", "", `present the local addresses of this node, separate by comma`)
 
 	// sysctl changes required by keepalived
 	sysctlAdjustments = map[string]int{
 		// allows processes to bind() to non-local IP addresses
 		"net/ipv4/ip_nonlocal_bind": 1,
 		// enable connection tracking for LVS connections
-		"net/ipv4/vs/conntrack": 1,
+	//	"net/ipv4/vs/conntrack": 1,
 	}
 )
+
+func split(s rune) bool {
+    if s == ',' {
+        return true
+    }
+    return false
+}
 
 func main() {
 	clientConfig := kubectl_util.DefaultClientConfig(flags)
@@ -64,6 +72,9 @@ func main() {
 
 	var err error
 	var kubeClient *unversioned.Client
+    var lips []string
+
+    lips = strings.FieldsFunc(*localIPs, split)
 
 	if *configMapName == "" {
 		glog.Fatalf("Please specify --services-configmap")
@@ -112,7 +123,7 @@ func main() {
 	if *useUnicast {
 		glog.Info("keepalived will use unicast to sync the nodes")
 	}
-	ipvsc := newIPVSController(kubeClient, namespace, *useUnicast, *configMapName)
+	ipvsc := newIPVSController(kubeClient, namespace, *useUnicast, *configMapName, lips)
 	go ipvsc.epController.Run(wait.NeverStop)
 	go ipvsc.svcController.Run(wait.NeverStop)
 

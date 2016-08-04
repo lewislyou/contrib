@@ -215,7 +215,7 @@ func (ipvsc *ipvsControllerController) getServices(cfgMap *api.ConfigMap) []vip 
 			svcs = append(svcs, vip{
 				Name:      fmt.Sprintf("%v/%v", s.Namespace, s.Name),
 				IP:        externalIP,
-				Port:      servicePort.NodePort,
+				Port:      int(servicePort.NodePort),
 				LVSMethod: lvsm,
 				Backends:  ep,
 				Protocol:  fmt.Sprintf("%v", servicePort.Protocol),
@@ -297,7 +297,7 @@ func (ipvsc *ipvsControllerController) Stop() error {
 }
 
 // newIPVSController creates a new controller from the given config.
-func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnicast bool, configMapName string) *ipvsControllerController {
+func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnicast bool, configMapName string, lips []string) *ipvsControllerController {
 	ipvsc := ipvsControllerController{
 		client:            kubeClient,
 		reloadRateLimiter: flowcontrol.NewTokenBucketRateLimiter(reloadQPS, int(reloadQPS)),
@@ -306,25 +306,26 @@ func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnic
 		stopCh:            make(chan struct{}),
 	}
 
-	podInfo, err := getPodDetails(kubeClient)
-	if err != nil {
-		glog.Fatalf("Error getting POD information: %v", err)
-	}
+	//podInfo, err := getPodDetails(kubeClient)
+	//if err != nil {
+	//	glog.Fatalf("Error getting POD information: %v", err)
+	//}
 
-	pod, err := kubeClient.Pods(podInfo.PodNamespace).Get(podInfo.PodName)
-	if err != nil {
-		glog.Fatalf("Error getting %v: %v", podInfo.PodName, err)
-	}
+	//pod, err := kubeClient.Pods(podInfo.PodNamespace).Get(podInfo.PodName)
+	//if err != nil {
+	//	glog.Fatalf("Error getting %v: %v", podInfo.PodName, err)
+	//}
 
-	selector := parseNodeSelector(pod.Spec.NodeSelector)
-	clusterNodes := getClusterNodesIP(kubeClient, selector)
-
-	nodeInfo, err := getNetworkInfo(podInfo.NodeIP)
+	//selector := parseNodeSelector(pod.Spec.NodeSelector)
+	//clusterNodes := getClusterNodesIP(kubeClient, selector)
+    
+	nodeInfo, err := getNetworkInfo(lips[0])
 	if err != nil {
 		glog.Fatalf("Error getting local IP from nodes in the cluster: %v", err)
 	}
 
-	neighbors := getNodeNeighbors(nodeInfo, clusterNodes)
+	//neighbors := getNodeNeighbors(nodeInfo, clusterNodes)
+    nodeInfo.iface = "eth1"
 
 	execer := exec.New()
 	dbus := utildbus.New()
@@ -334,9 +335,10 @@ func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnic
 		iface:      nodeInfo.iface,
 		ip:         nodeInfo.ip,
 		netmask:    nodeInfo.netmask,
-		nodes:      clusterNodes,
-		neighbors:  neighbors,
-		priority:   getNodePriority(nodeInfo.ip, clusterNodes),
+	//	nodes:      clusterNodes,
+	//	neighbors:  neighbors,
+        localIPs:   lips,
+		priority:   100,//getNodePriority(nodeInfo.ip, clusterNodes),
 		useUnicast: useUnicast,
 		ipt:        iptInterface,
 	}

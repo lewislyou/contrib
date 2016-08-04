@@ -43,6 +43,7 @@ type keepalived struct {
 	priority   int
 	nodes      []string
 	neighbors  []string
+    localIPs    []string
 	useUnicast bool
 	started    bool
 	vips       []string
@@ -69,6 +70,7 @@ func (k *keepalived) WriteCfg(svcs []vip) error {
 	conf["netmask"] = k.netmask
 	conf["svcs"] = svcs
 	conf["vips"] = getVIPs(svcs)
+    conf["lips"] = k.localIPs
 	conf["nodes"] = k.neighbors
 	conf["priority"] = k.priority
 	conf["useUnicast"] = k.useUnicast
