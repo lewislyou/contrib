@@ -20,14 +20,14 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"github.com/golang/glog"
 	"io"
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
-    "strings"
-	"github.com/golang/glog"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/cache"
@@ -198,8 +198,13 @@ func (ipvsc *ipvsControllerController) getServices(cfgMap *api.ConfigMap) []vip 
 
 		s := svcObj.(*api.Service)
 		for _, servicePort := range s.Spec.Ports {
-			np := servicePort.NodePort
-			if np == 0 {
+			var port int
+			if ipvsc.keepalived.useServicePort == true {
+				port = int(servicePort.Port)
+			} else {
+				port = int(servicePort.NodePort)
+			}
+			if port == 0 {
 				glog.Infof("No nodePort found for service %v, port %+v", s.Name, servicePort)
 				continue
 			}
@@ -215,7 +220,7 @@ func (ipvsc *ipvsControllerController) getServices(cfgMap *api.ConfigMap) []vip 
 			svcs = append(svcs, vip{
 				Name:      fmt.Sprintf("%v/%v", s.Namespace, s.Name),
 				IP:        externalIP,
-				Port:      int(servicePort.NodePort),
+				Port:      port,
 				LVSMethod: lvsm,
 				Backends:  ep,
 				Protocol:  fmt.Sprintf("%v", servicePort.Protocol),
@@ -297,7 +302,7 @@ func (ipvsc *ipvsControllerController) Stop() error {
 }
 
 // newIPVSController creates a new controller from the given config.
-func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnicast bool, configMapName string, lips []string) *ipvsControllerController {
+func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnicast bool, configMapName string, lips []string, useServicePort bool) *ipvsControllerController {
 	ipvsc := ipvsControllerController{
 		client:            kubeClient,
 		reloadRateLimiter: flowcontrol.NewTokenBucketRateLimiter(reloadQPS, int(reloadQPS)),
@@ -318,29 +323,30 @@ func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnic
 
 	//selector := parseNodeSelector(pod.Spec.NodeSelector)
 	//clusterNodes := getClusterNodesIP(kubeClient, selector)
-    
+
 	nodeInfo, err := getNetworkInfo(lips[0])
 	if err != nil {
 		glog.Fatalf("Error getting local IP from nodes in the cluster: %v", err)
 	}
 
 	//neighbors := getNodeNeighbors(nodeInfo, clusterNodes)
-    nodeInfo.iface = "eth1"
+	nodeInfo.iface = "lo"
 
 	execer := exec.New()
 	dbus := utildbus.New()
 	iptInterface := utiliptables.New(execer, dbus, utiliptables.ProtocolIpv4)
 
 	ipvsc.keepalived = &keepalived{
-		iface:      nodeInfo.iface,
-		ip:         nodeInfo.ip,
-		netmask:    nodeInfo.netmask,
-	//	nodes:      clusterNodes,
-	//	neighbors:  neighbors,
-        localIPs:   lips,
-		priority:   100,//getNodePriority(nodeInfo.ip, clusterNodes),
-		useUnicast: useUnicast,
-		ipt:        iptInterface,
+		iface:   nodeInfo.iface,
+		ip:      nodeInfo.ip,
+		netmask: nodeInfo.netmask,
+		//	nodes:      clusterNodes,
+		//	neighbors:  neighbors,
+		localIPs:       lips,
+		useServicePort: useServicePort,
+		priority:       100, //getNodePriority(nodeInfo.ip, clusterNodes),
+		useUnicast:     useUnicast,
+		ipt:            iptInterface,
 	}
 
 	ipvsc.syncQueue = NewTaskQueue(ipvsc.sync)

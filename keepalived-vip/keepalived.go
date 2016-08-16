@@ -37,19 +37,20 @@ const (
 var keepalivedTmpl = "keepalived.tmpl"
 
 type keepalived struct {
-	iface      string
-	ip         string
-	netmask    int
-	priority   int
-	nodes      []string
-	neighbors  []string
-    localIPs    []string
-	useUnicast bool
-	started    bool
-	vips       []string
-	tmpl       *template.Template
-	cmd        *exec.Cmd
-	ipt        iptables.Interface
+	iface          string
+	ip             string
+	netmask        int
+	priority       int
+	nodes          []string
+	neighbors      []string
+	localIPs       []string
+	useServicePort bool
+	useUnicast     bool
+	started        bool
+	vips           []string
+	tmpl           *template.Template
+	cmd            *exec.Cmd
+	ipt            iptables.Interface
 }
 
 // WriteCfg creates a new keepalived configuration file.
@@ -70,7 +71,7 @@ func (k *keepalived) WriteCfg(svcs []vip) error {
 	conf["netmask"] = k.netmask
 	conf["svcs"] = svcs
 	conf["vips"] = getVIPs(svcs)
-    conf["lips"] = k.localIPs
+	conf["lips"] = k.localIPs
 	conf["nodes"] = k.neighbors
 	conf["priority"] = k.priority
 	conf["useUnicast"] = k.useUnicast

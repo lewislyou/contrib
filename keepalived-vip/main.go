@@ -20,9 +20,9 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
-    "strings"
 
 	"github.com/golang/glog"
 	"github.com/spf13/pflag"
@@ -38,6 +38,8 @@ var (
 	cluster = flags.Bool("use-kubernetes-cluster-service", true, `If true, use the built in kubernetes
         cluster for creating the client`)
 
+	useServicePort = flags.Bool("use-service-port", false, `If true, use the service port as LVS service port`)
+
 	useUnicast = flags.Bool("use-unicast", false, `use unicast instead of multicast for communication
 		with other keepalived instances`)
 
@@ -46,22 +48,22 @@ var (
 		The key in the map indicates the external IP to use. The value is the name of the 
 		service with the format namespace/serviceName and the port of the service could be a number or the
 		name of the port.`)
-    localIPs = flags.String("use-local-addresses", "", `present the local addresses of this node, separate by comma`)
+	localIPs = flags.String("use-local-addresses", "", `present the local addresses of this node, separate by comma`)
 
 	// sysctl changes required by keepalived
 	sysctlAdjustments = map[string]int{
 		// allows processes to bind() to non-local IP addresses
 		"net/ipv4/ip_nonlocal_bind": 1,
 		// enable connection tracking for LVS connections
-	//	"net/ipv4/vs/conntrack": 1,
+		//	"net/ipv4/vs/conntrack": 1,
 	}
 )
 
 func split(s rune) bool {
-    if s == ',' {
-        return true
-    }
-    return false
+	if s == ',' {
+		return true
+	}
+	return false
 }
 
 func main() {
@@ -72,9 +74,9 @@ func main() {
 
 	var err error
 	var kubeClient *unversioned.Client
-    var lips []string
+	var lips []string
 
-    lips = strings.FieldsFunc(*localIPs, split)
+	lips = strings.FieldsFunc(*localIPs, split)
 
 	if *configMapName == "" {
 		glog.Fatalf("Please specify --services-configmap")
@@ -123,7 +125,7 @@ func main() {
 	if *useUnicast {
 		glog.Info("keepalived will use unicast to sync the nodes")
 	}
-	ipvsc := newIPVSController(kubeClient, namespace, *useUnicast, *configMapName, lips)
+	ipvsc := newIPVSController(kubeClient, namespace, *useUnicast, *configMapName, lips, *useServicePort)
 	go ipvsc.epController.Run(wait.NeverStop)
 	go ipvsc.svcController.Run(wait.NeverStop)
 
