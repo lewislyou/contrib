@@ -1,0 +1,30 @@
+!
+! Zebra configuration saved from vty
+!   2014/07/13 16:32:25
+!
+hostname NS-LVS-TEST-3
+password 8 WHQQH6POr04LQ
+enable password 8 WHQQH6POr04LQ
+log file /data/log/quagga/ospfd.log
+log stdout
+log syslog
+service password-encryption
+!
+!
+interface eth0
+ ip ospf network point-to-point
+ ip ospf hello-interval 1
+ ip ospf dead-interval 4
+!
+interface lo
+!
+router ospf
+ ospf router-id {{ .linkip }}
+ log-adjacency-changes
+ network {{ .linkip }}/30 area 0.0.0.3
+ {{ range $ip, $svc := .addressmap }}
+ !{{ $svc }}
+ network {{ $ip }}/32 area 0.0.0.3
+{{ end }}
+line vty
+!

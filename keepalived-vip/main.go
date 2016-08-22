@@ -50,6 +50,8 @@ var (
 		name of the port.`)
 	localIPs = flags.String("use-local-addresses", "", `present the local addresses of this node, separate by comma`)
 
+	linkIP = flags.String("use-link-address", "", `present the link address of this node`)
+
 	// sysctl changes required by keepalived
 	sysctlAdjustments = map[string]int{
 		// allows processes to bind() to non-local IP addresses
@@ -125,9 +127,10 @@ func main() {
 	if *useUnicast {
 		glog.Info("keepalived will use unicast to sync the nodes")
 	}
-	ipvsc := newIPVSController(kubeClient, namespace, *useUnicast, *configMapName, lips, *useServicePort)
+	ipvsc := newIPVSController(kubeClient, namespace, *useUnicast, *configMapName, lips, *useServicePort, *linkIP)
 	go ipvsc.epController.Run(wait.NeverStop)
 	go ipvsc.svcController.Run(wait.NeverStop)
+	go ipvsc.configmapController.Run(wait.NeverStop)
 
 	go ipvsc.syncQueue.run(time.Second, ipvsc.stopCh)
 
@@ -135,6 +138,7 @@ func main() {
 
 	glog.Info("starting keepalived to announce VIPs")
 	ipvsc.keepalived.Start()
+	ipvsc.ospfd.Start()
 }
 
 func handleSigterm(ipvsc *ipvsControllerController) {

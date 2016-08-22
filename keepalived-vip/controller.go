@@ -43,7 +43,7 @@ import (
 
 const (
 	reloadQPS    = 10.0
-	resyncPeriod = 60 * time.Second
+	resyncPeriod = 10 * time.Second
 )
 
 var (
@@ -105,16 +105,19 @@ func (c vipByNameIPPort) Less(i, j int) bool {
 // ipvsControllerController watches the kubernetes api and adds/removes
 // services from LVS throgh ipvsadmin.
 type ipvsControllerController struct {
-	client            *unversioned.Client
-	epController      *framework.Controller
-	svcController     *framework.Controller
-	svcLister         cache.StoreToServiceLister
-	epLister          cache.StoreToEndpointsLister
-	reloadRateLimiter flowcontrol.RateLimiter
-	keepalived        *keepalived
-	configMapName     string
-	ruCfg             []vip
-	ruMD5             string
+	client              *unversioned.Client
+	epController        *framework.Controller
+	svcController       *framework.Controller
+	configmapController *framework.Controller
+	svcLister           cache.StoreToServiceLister
+	epLister            cache.StoreToEndpointsLister
+	reloadRateLimiter   flowcontrol.RateLimiter
+	keepalived          *keepalived
+	ospfd               *ospfd
+	configMapName       string
+	ruCfg               []vip
+	ruKeepalivedMD5     string
+	ruospfdMD5          string
 
 	// stopLock is used to enforce only a single call to Stop is active.
 	// Needed because we allow stopping through an http endpoint and
@@ -242,7 +245,7 @@ func (ipvsc *ipvsControllerController) getConfigMap(ns, name string) (*api.Confi
 func (ipvsc *ipvsControllerController) sync(key string) error {
 	ipvsc.reloadRateLimiter.Accept()
 
-	if !ipvsc.epController.HasSynced() || !ipvsc.svcController.HasSynced() {
+	if !ipvsc.epController.HasSynced() || !ipvsc.svcController.HasSynced() || !ipvsc.configmapController.HasSynced() {
 		time.Sleep(100 * time.Millisecond)
 		return fmt.Errorf("deferring sync till endpoints controller has synced")
 	}
@@ -267,14 +270,31 @@ func (ipvsc *ipvsControllerController) sync(key string) error {
 	glog.V(2).Infof("services: %v", svc)
 
 	md5, err := checksum(keepalivedCfg)
-	if err == nil && md5 == ipvsc.ruMD5 {
+	if err == nil && md5 == ipvsc.ruKeepalivedMD5 {
 		return nil
 	}
 
-	ipvsc.ruMD5 = md5
+	ipvsc.ruKeepalivedMD5 = md5
 	err = ipvsc.keepalived.Reload()
 	if err != nil {
 		glog.Errorf("error reloading keepalived: %v", err)
+	}
+
+	err = ipvsc.ospfd.WriteCfg(svc)
+	if err != nil {
+		return err
+	}
+	glog.V(2).Infof("services: %v", svc)
+
+	md5, err = checksum(ospfdCfg)
+	if err == nil && md5 == ipvsc.ruKeepalivedMD5 {
+		return nil
+	}
+
+	ipvsc.ruospfdMD5 = md5
+	err = ipvsc.ospfd.Restart()
+	if err != nil {
+		glog.Errorf("error restarting ospf: %v", err)
 	}
 
 	return nil
@@ -302,7 +322,7 @@ func (ipvsc *ipvsControllerController) Stop() error {
 }
 
 // newIPVSController creates a new controller from the given config.
-func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnicast bool, configMapName string, lips []string, useServicePort bool) *ipvsControllerController {
+func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnicast bool, configMapName string, lips []string, useServicePort bool, linkIP string) *ipvsControllerController {
 	ipvsc := ipvsControllerController{
 		client:            kubeClient,
 		reloadRateLimiter: flowcontrol.NewTokenBucketRateLimiter(reloadQPS, int(reloadQPS)),
@@ -348,12 +368,20 @@ func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnic
 		useUnicast:     useUnicast,
 		ipt:            iptInterface,
 	}
+	ipvsc.ospfd = &ospfd{
+		linkip: linkIP,
+	}
 
 	ipvsc.syncQueue = NewTaskQueue(ipvsc.sync)
 
 	err = ipvsc.keepalived.loadTemplate()
 	if err != nil {
 		glog.Fatalf("Error loading keepalived template: %v", err)
+	}
+
+	err = ipvsc.ospfd.loadTemplate()
+	if err != nil {
+		glog.Fatalf("Error loading ospfd template: %v", err)
 	}
 
 	eventHandlers := framework.ResourceEventHandlerFuncs{
@@ -379,6 +407,11 @@ func newIPVSController(kubeClient *unversioned.Client, namespace string, useUnic
 		cache.NewListWatchFromClient(
 			ipvsc.client, "endpoints", namespace, fields.Everything()),
 		&api.Endpoints{}, resyncPeriod, eventHandlers)
+
+	_, ipvsc.configmapController = framework.NewInformer(
+		cache.NewListWatchFromClient(
+			ipvsc.client, "configmaps", namespace, fields.Everything()),
+		&api.ConfigMap{}, resyncPeriod, eventHandlers)
 
 	return &ipvsc
 }
