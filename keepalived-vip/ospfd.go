@@ -9,9 +9,9 @@ import (
 	"github.com/golang/glog"
 )
 
-const ospfdCfg = "/etc/ospfd/ospfd.conf"
+const ospfdCfg = "/data/quagga/etc/ospfd.conf"
 
-var ospfdTmpl = "ospfd.tmpl"
+var ospfdTmpl = "/ospfd.tmpl"
 
 type ospfd struct {
 	linkip  string

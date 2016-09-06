@@ -34,7 +34,7 @@ const (
 	keepalivedCfg = "/etc/keepalived/keepalived.conf"
 )
 
-var keepalivedTmpl = "keepalived.tmpl"
+var keepalivedTmpl = "/keepalived.tmpl"
 
 type keepalived struct {
 	iface          string

@@ -288,7 +288,7 @@ func parseNsSvcLVS(input string) (string, string, string, error) {
 	}
 
 	if kind == "" {
-		kind = "NAT"
+		kind = "FNAT"
 	}
 
 	if !lvsRegex.MatchString(kind) {

@@ -5,33 +5,8 @@ global_defs {
   vrrp_iptables {{ .iptablesChain }}
 }
 
-local_address_group laddr_g1 {
-  {{ range .lips }}
+local_address_group laddr_g1 {  {{ range .lips }}
   {{ . }}{{ end }}
-}
-
-vrrp_instance vips {
-  state BACKUP
-  interface {{ $iface }}
-  virtual_router_id 50
-  priority {{ .priority }}
-  nopreempt
-  advert_int 1
-
-  track_interface {
-    {{ $iface }}
-  }
-
-  {{ if .useUnicast }}
-  unicast_src_ip {{ .myIP }}
-  unicast_peer { {{ range .nodes }}
-    {{ . }}{{ end }}
-  }
-  {{ end }}
-
-  virtual_ipaddress { {{ range .vips }}
-    {{ . }}{{ end }}
-  }
 }
 
 {{ range $i, $svc := .svcs }}
@@ -44,13 +19,19 @@ virtual_server {{ $svc.IP }} {{ $svc.Port }} {
   protocol {{ $svc.Protocol }}
   syn_proxy
   laddr_group_name laddr_g1
+  alpha
+  omega
+  quorum 1
+  hysteresis 0
+  quorum_up "ip addr add {{ $svc.IP }}/32 dev lo;"
+  quorum_down "ip addr del {{ $svc.IP }}/32 dev lo;"
 
   {{ range $j, $backend := $svc.Backends }}
   real_server {{ $backend.IP }} {{ $backend.Port }} {
     weight 1
-    TCP_CHECK {
-      connect_port {{ $backend.Port }}
-      connect_timeout 3
+    MISC_CHECK {
+	misc_path "/sbin/healthcheck.sh"
+	delay_loop 60
     }
   }
 {{ end }}

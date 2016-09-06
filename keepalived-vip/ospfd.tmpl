@@ -21,6 +21,8 @@ interface lo
 router ospf
  ospf router-id {{ .linkip }}
  log-adjacency-changes
+! Important: ensure reference bandwidth is consistent across all routers
+  auto-cost reference-bandwidth 10000
  network {{ .linkip }}/30 area 0.0.0.3
  {{ range $ip, $svc := .addressmap }}
  !{{ $svc }}

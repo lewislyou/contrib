@@ -7,6 +7,15 @@ BUILD_IMAGE = build-keepalived
 
 controller: clean
 	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-w' -o kube-keepalived-vip
+install: 
+	mkdir -p /etc/keepalived
+	cp kube-keepalived-vip kube-keepalived-vip.sh healthcheck.sh /sbin
+	chmod +x kube-keepalived-vip.sh healthcheck.sh
+	cp keepalived.tmpl ospfd.tmpl /
+	cp keepalived-vip ospfd /etc/init.d
+	cp keepalived-vip-conf /etc/sysconfig/keepalived-vip
+	mkdir -p /data/quagga/etc
+	cp quagga /etc/sysconfig
 
 container: controller keepalived
 	docker build -t $(PREFIX):$(TAG) .
