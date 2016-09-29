@@ -1,0 +1,30 @@
+#!/bin/sh
+
+# See how we were called.
+case "$1" in
+    start)
+        start keepalived
+        ;;
+    stop)
+        stop keepalived
+        ;;
+    reload)
+        reload keepalived
+        ;;
+    restart)
+        stop keepalived
+        start keepalived
+        ;;
+    condrestart)
+        stop keepalived
+        start keepalived
+        ;;
+    status)
+        status keepalived
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|reload|restart|condrestart|status}"
+        exit 1
+esac
+
+exit $RETVAL

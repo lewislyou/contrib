@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"text/template"
 
 	"github.com/golang/glog"
@@ -46,7 +45,6 @@ type keepalived struct {
 	localIPs       []string
 	useServicePort bool
 	useUnicast     bool
-	started        bool
 	vips           []string
 	tmpl           *template.Template
 	cmd            *exec.Cmd
@@ -95,69 +93,31 @@ func getVIPs(svcs []vip) []string {
 	return result
 }
 
-// Start starts a keepalived process in foreground.
-// In case of any error it will terminate the execution with a fatal error
-func (k *keepalived) Start() {
-	ae, err := k.ipt.EnsureChain(iptables.TableFilter, iptables.Chain(iptablesChain))
-	if err != nil {
-		glog.Fatalf("unexpected error: %v", err)
-	}
-	if ae {
-		glog.V(2).Infof("chain %v already existed", iptablesChain)
-	}
 
-	k.cmd = exec.Command("keepalived",
-		"--dont-fork",
-		"--log-console",
-		"--release-vips",
-		"--pid", "/keepalived.pid")
+// Reload sends SIGHUP to keepalived to reload the configuration.
+func (k *keepalived) Reload() error {
+
+	glog.Info("reloading keepalived")
+	k.cmd = exec.Command("pkill",
+		"-SIGHUP",
+		"-x",
+		"keepalived")
 
 	k.cmd.Stdout = os.Stdout
 	k.cmd.Stderr = os.Stderr
 
-	k.started = true
 
 	if err := k.cmd.Start(); err != nil {
-		glog.Errorf("keepalived error: %v", err)
+		return fmt.Errorf("reload keepalived error: %v", err)
 	}
 
 	if err := k.cmd.Wait(); err != nil {
-		glog.Fatalf("keepalived error: %v", err)
-	}
-}
-
-// Reload sends SIGHUP to keepalived to reload the configuration.
-func (k *keepalived) Reload() error {
-	if !k.started {
-		// TODO: add a warning indicating that keepalived is not started?
-		return nil
-	}
-
-	glog.Info("reloading keepalived")
-	err := syscall.Kill(k.cmd.Process.Pid, syscall.SIGHUP)
-	if err != nil {
-		return fmt.Errorf("error reloading keepalived: %v", err)
+		return fmt.Errorf("reload keepalived error: %v", err)
 	}
 
 	return nil
 }
 
-// Stop stop keepalived process
-func (k *keepalived) Stop() {
-	for _, vip := range k.vips {
-		k.removeVIP(vip)
-	}
-
-	err := k.ipt.FlushChain(iptables.TableFilter, iptables.Chain(iptablesChain))
-	if err != nil {
-		glog.V(2).Infof("unexpected error flushing iptables chain %v: %v", err, iptablesChain)
-	}
-
-	err = syscall.Kill(k.cmd.Process.Pid, syscall.SIGTERM)
-	if err != nil {
-		fmt.Errorf("error stopping keepalived: %v", err)
-	}
-}
 
 func resetIPVS() error {
 	glog.Info("cleaning ipvs configuration")

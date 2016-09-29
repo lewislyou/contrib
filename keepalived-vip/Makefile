@@ -12,10 +12,12 @@ install:
 	cp kube-keepalived-vip kube-keepalived-vip.sh healthcheck.sh /sbin
 	chmod +x kube-keepalived-vip.sh healthcheck.sh
 	cp keepalived.tmpl ospfd.tmpl /
-	cp keepalived-vip ospfd /etc/init.d
+#	cp keepalived-vip ospfd /etc/init.d
 	cp keepalived-vip-conf /etc/sysconfig/keepalived-vip
 	mkdir -p /data/quagga/etc
 	cp quagga /etc/sysconfig
+	cp init.d/* /etc/init.d/
+	cp init/* /etc/init/
 
 container: controller keepalived
 	docker build -t $(PREFIX):$(TAG) .

@@ -1,0 +1,39 @@
+#!/bin/sh
+# chkconfig:   2345 90 10
+
+SERVICES=( zebra ospfd keepalived keepalived-vip)
+
+service_manager(){
+    for SERVICE in ${SERVICES[@]}
+    do
+        service $SERVICE $1
+    done   
+}
+
+# See how we were called.
+case "$1" in
+    start)
+        service_manager start
+        ;;
+    stop)
+        service_manager stop
+        ;;
+    #reload)
+    #    reload keepalived
+    #    ;;
+    restart)
+        service_manager stop
+        service_manager start
+        ;;
+    condrestart)
+        service_manager stop
+        service_manager start
+        ;;
+    status)
+        service_manager status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|reload|restart|condrestart|status}"
+        exit 1
+esac
+

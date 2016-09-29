@@ -1,0 +1,34 @@
+#!/bin/bash
+# chkconfig: - 15 85
+# config: /etc/quagga/zebra.conf
+
+### BEGIN INIT INFO
+# Provides: zebra
+# Short-Description: GNU Zebra routing manager
+# Description: GNU Zebra routing manager
+### END INIT INFO
+
+case "$1" in
+  start)
+    start zebra
+	;;
+  stop)
+    stop zebra
+	;;
+  restart|reload|force-reload)
+    stop zebra
+    start zebra
+        ;;
+  condrestart|try-restart)
+    stop zebra
+    start zebra 
+        ;;
+  status)
+    /usr/sbin/zebra.sh status
+        ;;
+  *)
+	echo $"Usage: $0 {start|stop|restart|reload|force-reload|try-restart|status}"
+	exit 2
+esac
+
+exit $RETVAL

@@ -325,7 +325,6 @@ func (ipvsc *ipvsControllerController) Stop() error {
 		glog.Infof("Shutting down controller queue")
 		ipvsc.syncQueue.shutdown()
 
-		ipvsc.keepalived.Stop()
 
 		return nil
 	}

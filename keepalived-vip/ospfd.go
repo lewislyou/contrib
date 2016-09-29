@@ -49,36 +49,21 @@ func (o *ospfd) WriteCfg(svcs []vip) error {
 	return o.tmpl.Execute(w, conf)
 }
 
-func (o *ospfd) Start() {
-	o.cmd = exec.Command("/etc/init.d/ospfd", "start")
-
-	o.cmd.Stdout = os.Stdout
-	o.cmd.Stderr = os.Stderr
-	o.started = true
-
-	if err := o.cmd.Start(); err != nil {
-		glog.Errorf("ospfd error: %v", err)
-	}
-
-	if err := o.cmd.Wait(); err != nil {
-		glog.Errorf("ospfd error: %v", err)
-	}
-}
 
 func (o *ospfd) Restart() error {
 	var err error
-	o.cmd = exec.Command("/etc/init.d/ospfd", "restart")
+	o.cmd = exec.Command("pkill", "ospfd")
 
 	o.cmd.Stdout = os.Stdout
 	o.cmd.Stderr = os.Stderr
 	o.started = true
 
 	if err = o.cmd.Start(); err != nil {
-		glog.Errorf("ospfd error: %v", err)
+		glog.Errorf("restart ospfd error: %v", err)
 	}
 
 	if err = o.cmd.Wait(); err != nil {
-		glog.Errorf("ospfd error: %v", err)
+		glog.Errorf("restart ospfd error: %v", err)
 	}
 	return err
 }

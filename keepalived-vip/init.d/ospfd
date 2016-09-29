@@ -1,0 +1,25 @@
+#!/bin/bash
+
+case "$1" in
+  start)
+        start ospfd
+	;;
+  stop)
+        stop ospfd
+	;;
+  restart|reload|force-reload)
+        $0 stop
+        $0 start
+        ;;
+  condrestart|try-restart)
+        $0 stop
+        $0 start
+        ;;
+  status)
+        status ospfd
+        ;;
+  *)
+	echo $"Usage: $PROG {start|stop|restart|reload|force-reload|try-restart|status}"
+	exit 2
+esac
+

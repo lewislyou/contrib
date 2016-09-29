@@ -118,10 +118,6 @@ func main() {
 		glog.Fatalf("unexpected error: %v", err)
 	}
 
-	err = resetIPVS()
-	if err != nil {
-		glog.Fatalf("unexpected error: %v", err)
-	}
 
 	glog.Info("starting LVS configuration")
 	if *useUnicast {
@@ -137,8 +133,7 @@ func main() {
 	go handleSigterm(ipvsc)
 
 	glog.Info("starting keepalived to announce VIPs")
-	ipvsc.keepalived.Start()
-	ipvsc.ospfd.Start()
+	handleSigterm(ipvsc)
 }
 
 func handleSigterm(ipvsc *ipvsControllerController) {
