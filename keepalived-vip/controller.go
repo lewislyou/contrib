@@ -20,14 +20,16 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
-	"github.com/golang/glog"
 	"io"
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/golang/glog"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/cache"
@@ -175,20 +177,54 @@ func (ipvsc *ipvsControllerController) getServices(cfgMap *api.ConfigMap) []vip 
 	// k -> IP to use
 	// v -> <namespace>/<service name>:<lvs method>
 	for externalIP, nsSvcLvs := range cfgMap.Data {
+		vipvport := strings.Split(externalIP, "-")
+		if len(vipvport) == 2 {
+			for _, nsSvcLvsEle := range strings.Split(nsSvcLvs, ",") {
+				var nsSvcLvsEleSvc, portAsExternalPort string
+				colonIndex := strings.Index(nsSvcLvsEle, ":")
+				nsSvcLvsEleSvc = nsSvcLvsEle[:colonIndex]
+				portAsExternalPort = nsSvcLvsEle[colonIndex+1:]
+				var virtualEps []service
+				processPort, err := strconv.Atoi(portAsExternalPort)
+				if err != nil {
+					glog.Infof("process port specified error with host process")
+					continue
+				}
+				externalPort, err := strconv.Atoi(vipvport[1])
+				if err != nil {
+					glog.Infof("external port specified error with host process")
+					continue
+				}
+				virtualEps = append(virtualEps, service{
+					IP:   nsSvcLvsEleSvc,
+					Port: processPort,
+				})
+				svcs = append(svcs, vip{
+					Name:      fmt.Sprintf("%v/%v", "Hostname", "Processname"),
+					IP:        vipvport[0],
+					Port:      externalPort,
+					LVSMethod: "FNAT",
+					Backends:  virtualEps,
+					Protocol:  fmt.Sprintf("TCP"),
+				})
+			}
+			continue
+		}
+
 		for _, nsSvcLvsEle := range strings.Split(nsSvcLvs, ",") {
-            var portAsExternalPort string
+			var portAsExternalPort string
 			if ipvsc.keepalived.useServicePort == true {
 				portAsExternalPort = "s"
 			} else {
 				portAsExternalPort = "n"
 			}
-            var nsSvcLvsEleSvc string
-            if colonIndex := strings.Index(nsSvcLvsEle, ":"); colonIndex < 0 {
-                nsSvcLvsEleSvc = nsSvcLvsEle
-            } else {
-                nsSvcLvsEleSvc = nsSvcLvsEle[:colonIndex]
-                portAsExternalPort = nsSvcLvsEle[colonIndex+1:]
-            }
+			var nsSvcLvsEleSvc string
+			if colonIndex := strings.Index(nsSvcLvsEle, ":"); colonIndex < 0 {
+				nsSvcLvsEleSvc = nsSvcLvsEle
+			} else {
+				nsSvcLvsEleSvc = nsSvcLvsEle[:colonIndex]
+				portAsExternalPort = nsSvcLvsEle[colonIndex+1:]
+			}
 			ns, svc, lvsm, err := parseNsSvcLVS(nsSvcLvsEleSvc)
 			if err != nil {
 				glog.Warningf("%v", err)
@@ -214,11 +250,11 @@ func (ipvsc *ipvsControllerController) getServices(cfgMap *api.ConfigMap) []vip 
 					port = int(servicePort.Port)
 				} else if portAsExternalPort == "n" || portAsExternalPort == "N" {
 					port = int(servicePort.NodePort)
-                } else {
-                    glog.Infof("external port specified error, svc:[nNsS] is expected")
-                    continue
+				} else {
+					glog.Infof("external port specified error, svc:[nNsS] is expected")
+					continue
 				}
-				if  port == 0 {
+				if port == 0 {
 					glog.Infof("No nodePort found for service %v, port %+v", s.Name, servicePort)
 					continue
 				}
@@ -324,7 +360,6 @@ func (ipvsc *ipvsControllerController) Stop() error {
 
 		glog.Infof("Shutting down controller queue")
 		ipvsc.syncQueue.shutdown()
-
 
 		return nil
 	}
